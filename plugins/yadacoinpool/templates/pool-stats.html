@@ -55,7 +55,8 @@
     <div class="column">
       <div class="box">
         <h5><b>BLOCK REAWORD</b></h5>
-        <div><span  id="network-reward"></span> YDA</div>
+        <h4><div>MINERS: <b><span  id="miners-reward"></span></b></div></h4>
+        <h4><div>MASTER NODES: <b><span  id="master-nodes-reward"></span></b></div></h4>
       </div>
     </div>
     <div class="column">
@@ -94,7 +95,7 @@
         <h5><b><center>HOW TO START</center></b></h5>
         <div>Create wallet</div>
         <div>Download XMRigCC</div>
-        <div>XMRigCC conf.json settings:</div>
+        <div>XMRigCC config.json settings:</div>
         <h5>"algo": "rx/yada",</h5>
         <h5>"url": "<span id="pool-url">"</span>",</h5>
         <h5>"user": "Your wallet address.Worker ID",</h5>
@@ -110,7 +111,7 @@
         </center>
       <h2>POOL BLOCKS</h2>
       <table id="blocks-table" class="table">
-        <tr><th>Time Found</th><th>Height</th><th>Reward</th><th>Block Hash</th></tr> <!- TODO: I tried to get a reward from "pool-blocks" but if a block has more than one transaction, strange values came out ->
+        <tr><th>Time Found</th><th>Height</th><th>Reward</th><th>Block Hash</th></tr>
       </table>
       <center><button class="button" role="button"><a href="#" id="loadMore">Load More Blocks</a></button></center>
       <h2>MINER STATISTICS</h2>
@@ -162,7 +163,11 @@
                 }
                 $('#network-difficulty').html(data.network.difficulty.toFixed(3));
                 $('#network-height').html(data.network.height);
-                $('#network-reward').html(data.network.reward);
+                var blockReward = parseFloat(data.network.reward);
+                var MinersReward = (90 / 100) * blockReward;
+                var NodesReward = (10 / 100) * blockReward;
+                $('#miners-reward').html(MinersReward.toFixed(2) + ' YDA');
+                $('#master-nodes-reward').html(NodesReward.toFixed(2) + ' YDA');
                 var newDate = new Date();
                 newDate.setTime(data.network.last_block*1000);
                 dateString = newDate.toLocaleString();
@@ -193,7 +198,18 @@
                         var newDate = new Date();
                         newDate.setTime(data.pool.blocks[i].time*1000);
                         dateString = newDate.toLocaleString();
-                        $('#blocks-table').append('<tr><td>' + dateString + '</td><td>' + data.pool.blocks[i].index + '</a></td><td>N/a</td><td><a target="_blank" href="https://yadacoin.io/explorer?term=' + data.pool.blocks[i].hash + '">' + data.pool.blocks[i].hash + '</td></tr>');
+                        var reward = getRewardFromOutputs(data.pool.blocks[i].transactions);
+                        $('#blocks-table').append('<tr><td>' + dateString + '</td><td>' + data.pool.blocks[i].index + '</a></td><td>' + reward + '</td><td><a target="_blank" href="https://yadacoin.io/explorer?term=' + data.pool.blocks[i].hash + '">' + data.pool.blocks[i].hash + '</td></tr>');
+                    }
+                    function getRewardFromOutputs(transactions) {
+                        for (var i = 0; i < transactions.length; i++) {
+                            for (var j = 0; j < transactions[i].outputs.length; j++) {
+                                if (transactions[i].outputs[j].to === data.pool.pool_address) {
+                                    return transactions[i].outputs[j].value + ' YDA';
+                                }
+                            }
+                         }
+                         return 'N/a';
                     }
                     var pagelength = 5;
                     var pageIndex = 1;
@@ -373,4 +389,3 @@ li {
 }
 </style>
 </html>
-
