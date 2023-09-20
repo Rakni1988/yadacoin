@@ -2,6 +2,7 @@
 Handlers required by the pool operations
 """
 
+import time
 
 from yadacoin.http.base import BaseHandler
 
@@ -54,18 +55,9 @@ class PoolHashRateHandler(BaseHandler):
                     {"address_only": address},
                 ]
             }
-        last_share = await self.config.mongo.async_db.shares.find_one(
-            query, {"_id": 0}, sort=[("time", -1)]
-        )
-        if not last_share:
-            return self.render_as_json({"result": 0})
-        miner_hashrate_seconds = (
-            self.config.miner_hashrate_seconds
-            if hasattr(self.config, "miner_hashrate_seconds")
-            else 1200
-        )
+        miner_hashrate_seconds = 1200
 
-        query = {"time": {"$gt": last_share["time"] - miner_hashrate_seconds}}
+        query = {"time": {"$gt": time.time() - miner_hashrate_seconds}}
         if "." in address:
             query["address"] = address
         else:
@@ -80,7 +72,6 @@ class PoolHashRateHandler(BaseHandler):
             number_of_shares * self.config.pool_diff
         ) / miner_hashrate_seconds
         self.render_as_json({"miner_hashrate": int(miner_hashrate)})
-
 
 class PoolScanMissedPayoutsHandler(BaseHandler):
     async def get(self):
