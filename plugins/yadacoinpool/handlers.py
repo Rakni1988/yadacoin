@@ -168,6 +168,7 @@ class PoolInfoHandler(BaseWebHandler):
                     "version": ".".join([str(x) for x in version]),
                 },
                 "pool": {
+                    "pool_address": self.config.address,
                     "hashes_per_second": pool_hash_rate,
                     "miner_count": miner_count_pool_stat["value"],
                     "worker_count": worker_count_pool_stat["value"],
