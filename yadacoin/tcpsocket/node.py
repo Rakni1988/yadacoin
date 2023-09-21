@@ -194,7 +194,7 @@ class NodeRPC(BaseRPC):
         txn = item.transaction
         stream = item.stream
         try:
-            await txn.verify()
+            await txn.verify(check_input_spent=True)
         except:
             return
 
@@ -382,6 +382,7 @@ class NodeRPC(BaseRPC):
             self.config.app_log.info(f"blocksresponse, no blocks, {stream.peer.host}")
             self.config.consensus.syncing = False
             stream.synced = True
+            await self.send_mempool(stream)
             return
         self.config.consensus.syncing = True
         blocks = [await Block.from_dict(x) for x in blocks]
@@ -424,11 +425,13 @@ class NodeRPC(BaseRPC):
     async def blockresponse(self, body, stream):
         # get blocks should be done only by syncing peers
         result = body.get("result", {})
-        if not result.get("block"):
-            self.config.app_log.info(f"blockresponse, no block, {stream.peer.host}")
+        if stream.peer.protocol_version > 1:
             await self.config.nodeShared.write_result(
                 stream, "blockresponse_confirmed", body.get("result", {}), body["id"]
             )
+
+        if not result.get("block"):
+            self.config.app_log.info(f"blockresponse, no block, {stream.peer.host}")
             return
 
         self.config.processing_queues.block_queue.add(
@@ -668,7 +671,6 @@ class NodeRPC(BaseRPC):
                 )
             )
             await self.send_block_to_peer(self.config.LatestBlock.block, stream)
-            await self.send_mempool(stream)
             await self.get_next_block(self.config.LatestBlock.block)
         else:
             stream.close()
