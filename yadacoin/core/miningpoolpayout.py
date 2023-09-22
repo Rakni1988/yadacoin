@@ -72,8 +72,19 @@ class PoolPayer(object):
                 continue
             if self.config.debug:
                 self.app_log.debug(won_block.index)
+                    # Now, check if any transaction in the block has no inputs
+            transaction_with_no_inputs = None
+            for transaction in won_block.transactions:
+                if not transaction.inputs:
+                    transaction_with_no_inputs = transaction
+                    break
+        
+            if transaction_with_no_inputs:
+                signature = transaction_with_no_inputs.hash
+                do_payout = True
+                break
             if (
-                won_block.index + self.config.payout_frequency
+                won_block.index + 6    #block maturation, 6 confirmations of a block qualifies it for payout, can be increased
             ) <= self.config.LatestBlock.block.index:
                 if len(ready_blocks) >= self.config.payout_frequency:
                     if self.config.debug:
@@ -156,8 +167,11 @@ class PoolPayer(object):
                     "do_payout_for_blocks passed address compare {}".format(block.index)
                 )
             pool_take = self.config.pool_take
-            total_pool_take = coinbase.outputs[0].value * pool_take
-            total_payout = coinbase.outputs[0].value - total_pool_take
+            if self.config.pool_take == 0:
+                total_payout = coinbase.outputs[0].value - 0.0001
+            else:
+                total_pool_take = coinbase.outputs[0].value * pool_take
+                total_payout = coinbase.outputs[0].value - total_pool_take
             coinbases.append(coinbase)
             if self.config.debug:
                 self.app_log.debug(
