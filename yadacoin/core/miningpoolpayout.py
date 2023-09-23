@@ -72,17 +72,6 @@ class PoolPayer(object):
                 continue
             if self.config.debug:
                 self.app_log.debug(won_block.index)
-                    # Now, check if any transaction in the block has no inputs
-            transaction_with_no_inputs = None
-            for transaction in won_block.transactions:
-                if not transaction.inputs:
-                    transaction_with_no_inputs = transaction
-                    break
-        
-            if transaction_with_no_inputs:
-                signature = transaction_with_no_inputs.hash
-                do_payout = True
-                break
             if (
                 won_block.index + 6    #block maturation, 6 confirmations of a block qualifies it for payout, can be increased
             ) <= self.config.LatestBlock.block.index:
