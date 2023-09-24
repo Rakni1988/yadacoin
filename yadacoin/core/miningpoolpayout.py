@@ -71,26 +71,29 @@ class PoolPayer(object):
             if coinbase.outputs[0].to != self.config.address:
                 continue
             if self.config.debug:
-                self.app_log.debug(won_block.index)
-            if (
-                won_block.index + 6    #block maturation, 6 confirmations of a block qualifies it for payout, can be increased
-            ) <= self.config.LatestBlock.block.index:
-                if len(ready_blocks) >= self.config.payout_frequency:
-                    if self.config.debug:
-                        self.app_log.debug(
-                            "entering payout at block: {}".format(won_block.index)
-                        )
-                    do_payout = True
-                    break
-                else:
-                    if self.config.debug:
-                        self.app_log.debug(
-                            "block added for payout {}".format(won_block.index)
-                        )
-                    ready_blocks.append(won_block)
+                   self.app_log.debug(won_block.index)
+
+            confirmations = self.config.LatestBlock.block.index - won_block.index
+            if confirmations < 6:
+                if self.config.debug:
+                    self.app_log.debug("Payment stopped, block has insufficient confirmations.")
+                continue
+            if self.config.debug:
+                self.app_log.debug(
+                    "block added for payout {}".format(won_block.index)
+                )
+            ready_blocks.append(won_block)
+
+        if ready_blocks:
+            do_payout = True
 
         if not do_payout:
+            if self.config.debug:
+                self.app_log.debug("No payout is required.")
             return
+        else:
+            if self.config.debug:
+                self.app_log.debug("Payout is required.") 
 
         # check if we already paid out
         outputs = {}
@@ -156,10 +159,10 @@ class PoolPayer(object):
                     "do_payout_for_blocks passed address compare {}".format(block.index)
                 )
             pool_take = self.config.pool_take
-            if self.config.pool_take == 0:
-                total_payout = coinbase.outputs[0].value - 0.0001
+            if pool_take == 0:
+                total_payout = coinbase.outputs[0].value - 0.0001  # We charge a transaction fee only
             else:
-                total_pool_take = coinbase.outputs[0].value * pool_take
+                total_pool_take = coinbase.outputs[0].value * (pool_take)
                 total_payout = coinbase.outputs[0].value - total_pool_take
             coinbases.append(coinbase)
             if self.config.debug:
@@ -251,8 +254,9 @@ class PoolPayer(object):
         await self.config.mongo.async_db.miner_transactions.insert_one(
             transaction.to_dict()
         )
+        block_indexes = [block.index for block in ready_blocks]
         await self.config.mongo.async_db.share_payout.insert_one(
-            {"index": block.index, "txn": transaction.to_dict()}
+            {"index": block_indexes, "txn": transaction.to_dict()}
         )
         await self.broadcast_transaction(transaction)
 
