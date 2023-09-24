@@ -3,12 +3,12 @@ from time import time
 from motor.motor_tornado import MotorClient
 from pymongo import ASCENDING, DESCENDING, IndexModel, MongoClient
 
-from yadacoin.core.config import get_config
+from yadacoin.core.config import Config
 
 
 class Mongo(object):
     def __init__(self):
-        self.config = get_config()
+        self.config = Config()
         self.client = MongoClient(self.config.mongodb_host)
         self.db = self.client[self.config.database]
         self.site_db = self.client[self.config.site_database]
@@ -297,7 +297,7 @@ class Mongo(object):
 class AsyncDB:
     def __init__(self, async_client):
         self.async_client = async_client
-        self._config = get_config()
+        self._config = Config()
         self.slow_queries = []
 
     def __getattr__(self, __name: str):
@@ -317,7 +317,7 @@ class AsyncDB:
 
 class Collection:
     def __init__(self, async_client, collection):
-        self._config = get_config()
+        self._config = Config()
         self._db = async_client[self._config.database]
         self.collection = collection
 
@@ -339,6 +339,7 @@ class Collection:
 
     async def find_one(self, *args, **kwargs):
         self.set_start_time()
+        kwargs["max_time_ms"] = self._config.mongo_query_timeout
         result = await self._db.get_collection(self.collection).find_one(
             *args, **kwargs
         )
@@ -349,6 +350,7 @@ class Collection:
 
     def find(self, *args, **kwargs):
         self.set_start_time()
+        kwargs["max_time_ms"] = self._config.mongo_query_timeout
         result = self._db.get_collection(self.collection).find(*args, **kwargs)
         if self.collection == "child_keys":
             return result
@@ -357,11 +359,20 @@ class Collection:
 
     async def count_documents(self, *args, **kwargs):
         self.set_start_time()
-        result = await self._db.get_collection(self.collection).count_documents(
-            *args, **kwargs
+        pipeline = [
+            {"$match": args[0]},
+            {"$group": {"_id": None, "count": {"$sum": 1}}},
+        ]
+        cursor = self._db.get_collection(self.collection).aggregate(
+            pipeline, maxTimeMS=self._config.mongo_query_timeout
         )
+        result = 0
+        async for doc in cursor:
+            result = doc.get("count", 0)
+            break
         if self.collection == "child_keys":
             return result
+
         self.do_logging("count_documents", args, kwargs)
         return result
 
@@ -417,7 +428,9 @@ class Collection:
 
     def aggregate(self, *args, **kwargs):
         self.set_start_time()
-        result = self._db.get_collection(self.collection).aggregate(*args, **kwargs)
+        result = self._db.get_collection(self.collection).aggregate(
+            *args, **kwargs, maxTimeMS=self._config.mongo_query_timeout
+        )
         if self.collection == "child_keys":
             return result
         self.do_logging("aggregate", args, kwargs)

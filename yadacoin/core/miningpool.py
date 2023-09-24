@@ -8,8 +8,9 @@ from time import time
 from yadacoin.core.block import Block
 from yadacoin.core.blockchain import Blockchain
 from yadacoin.core.chain import CHAIN
-from yadacoin.core.config import get_config
+from yadacoin.core.config import Config
 from yadacoin.core.job import Job
+from yadacoin.core.peer import Peer
 from yadacoin.core.processingqueue import BlockProcessingQueueItem
 from yadacoin.core.transaction import Transaction
 from yadacoin.core.transactionutils import TU
@@ -20,7 +21,7 @@ class MiningPool(object):
     @classmethod
     async def init_async(cls):
         self = cls()
-        self.config = get_config()
+        self.config = Config()
         self.mongo = self.config.mongo
         self.app_log = getLogger("tornado.application")
         self.target_block_time = CHAIN.target_block_time(self.config.network)
@@ -273,7 +274,7 @@ class MiningPool(object):
         trigger the events for the pools, even if the block index did not change."""
         # TODO: to be taken care of, no refresh atm between blocks
         try:
-            if self.refreshing:
+            if self.refreshing or not await Peer.is_synced():
                 return
             self.refreshing = True
             await self.config.LatestBlock.block_checker()

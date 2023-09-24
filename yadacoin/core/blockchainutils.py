@@ -9,7 +9,7 @@ from coincurve import PrivateKey
 
 from yadacoin.core.blockchain import Blockchain
 from yadacoin.core.chain import CHAIN
-from yadacoin.core.config import get_config
+from yadacoin.core.config import Config
 
 GLOBAL_BU = None
 
@@ -30,7 +30,7 @@ class BlockChainUtils(object):
     database = None
 
     def __init__(self):
-        self.config = get_config()
+        self.config = Config()
         self.mongo = self.config.mongo
         self.latest_block = None
         self.app_log = getLogger("tornado.application")
@@ -515,4 +515,4 @@ class BlockChainUtils(object):
             prev_time = int(block.time)
 
         # total work(number of hashes) over time gives us the hashrate
-        return int(sum_work / sum_time)
+        return int(sum_work / sum_time) if len(blocks) > 1 else 0

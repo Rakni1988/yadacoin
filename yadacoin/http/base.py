@@ -5,22 +5,25 @@ Base handler ancestor, factorize common functions
 import json
 import logging
 
+from tornado.ioloop import IOLoop
 from tornado.web import RequestHandler
 
-from yadacoin.core.config import get_config
+from yadacoin.core.config import Config
+from yadacoin.enums.modes import MODES
 
 
 class BaseHandler(RequestHandler):
     """Common ancestor for all route handlers"""
 
     def initialize(self):
+        self.timed_out = False
         """Common init for every request"""
         origin = self.get_query_argument("origin", "*")
         if origin[-1] == "/":
             origin = origin[:-1]
         self.app_log = logging.getLogger("tornado.application")
         self.app_log.info(self._request_summary())
-        self.config = get_config()
+        self.config = Config()
         self.yadacoin_vars = self.settings["yadacoin_vars"]
         self.settings["page_title"] = self.settings["app_title"]
         self.set_header("Access-Control-Allow-Origin", origin)
@@ -34,13 +37,39 @@ class BaseHandler(RequestHandler):
         self.set_header("Access-Control-Max-Age", 600)
         self.jwt = {}
 
-    async def prepare(self):
+    async def prepare(self, exceptions=None):
         if (
             self.config.api_whitelist
             and self.request.remote_ip not in self.config.api_whitelist
         ):
             self.status_code = 400
             self.render_as_json({"status": "error", "message": "Not on the whitelist."})
+
+        if exceptions is None:
+            exceptions = []
+        if (
+            self.request.protocol == "http"
+            and MODES.SSL.value in self.config.modes
+            and self.config.ssl.is_valid()
+            and self.request.path not in exceptions
+        ):
+            self.redirect(
+                "https://" + self.request.host + self.request.uri, permanent=False
+            )
+
+        self.timeout_seconds = (
+            self.config.http_request_timeout
+        )  # Default timeout for all handlers
+
+        loop = IOLoop.current()
+
+        def on_timeout():
+            self.timed_out = True
+            self.set_status(503)  # 408 Request Timeout
+
+        self.timeout_handle = loop.add_timeout(
+            loop.time() + self.timeout_seconds, on_timeout
+        )
 
         # if 'Authorization' in self.request.headers:
         #     try:
@@ -62,6 +91,12 @@ class BaseHandler(RequestHandler):
         #             return self.finish()
         #     except:
         #         i=0
+
+    def finish(self, *args, **kwargs):
+        if self.timed_out:
+            return super().finish()
+        IOLoop.current().remove_timeout(self.timeout_handle)
+        super().finish(*args, **kwargs)
 
     # This could be static, but its easier to let it there so the template have direct access.
     def bool2str(self, a_boolean, iftrue, iffalse):
@@ -96,9 +131,16 @@ class BaseHandler(RequestHandler):
 
     def render_as_json(self, data, indent=None):
         """Converts to json and streams out"""
+        self.set_header("Content-Type", "application/json")
+        if self.timed_out:
+            json_result = json.dumps(
+                {"status": False, "message": "Request timed out"}, indent=indent
+            )
+            self.write(json_result)
+            return self.finish()
+        IOLoop.current().remove_timeout(self.timeout_handle)
         json_result = json.dumps(data, indent=indent)
         self.write(json_result)
-        self.set_header("Content-Type", "application/json")
         self.finish()
         return True
 
