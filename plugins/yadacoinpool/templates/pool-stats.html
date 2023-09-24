@@ -121,6 +121,10 @@
       </form>
       <h4><b><span id="hash-rate"></span></b></h4>
       <h4><b><span id="total-hash"></span></b></h4>
+      <h4>Last 24h Paid: <span id="last-24h-paid"></span></h4>
+      <h4>Last 7 Days Paid: <span id="last-7-days-paid"></span></h4>
+      <h4>Total Paid: <span id="total-paid"></span></h4>
+
       <table id="payouts-table" class="table">
         <tr><th>Time Sent</th><th>TXN ID</th><th>Amount</th></tr>
       </table>
@@ -219,28 +223,70 @@
             })
             $('#form').submit(function(e) {
                 e.preventDefault();
+                $.get('/payouts-for-address?address=' + $('#address').val()).then((data) => {
+                    if (data.results.length === 0) {
+                        // Brak wypłat, ustaw zmienne na 0
+                        last24hPaid = 0;
+                        last7DaysPaid = 0;
+                        totalPaid = 0;
+                    } else {
+                        // Oblicz datę sprzed 24 godzin i 7 dni
+                        const now = new Date();
+                        const last24hDate = new Date(now - 24 * 60 * 60 * 1000);
+                        const last7DaysDate = new Date(now - 7 * 24 * 60 * 60 * 1000);
+
+                        for (let i = 0; i < data.results.length; i++) {
+                            const payoutDate = new Date(data.results[i]['txn'].time * 1000);
+                            const payoutAmount = parseFloat(data.results[i]['txn'].outputs[0].value);
+
+                            // Sprawdź, czy data jest w ciągu ostatnich 24 godzin
+                            if (payoutDate >= last24hDate) {
+                                last24hPaid += payoutAmount;
+                            }
+
+                            // Sprawdź, czy data jest w ciągu ostatnich 7 dni
+                            if (payoutDate >= last7DaysDate) {
+                                last7DaysPaid += payoutAmount;
+                            }
+
+                            // Dodaj do totalPaid niezależnie od daty
+                            totalPaid += payoutAmount;
+                        }
+                    }
+
+                    // Teraz możesz zaktualizować te wartości na stronie
+                    $('#last-24h-paid').html(last24hPaid.toFixed(8) + ' YDA');
+                    $('#last-7-days-paid').html(last7DaysPaid.toFixed(8) + ' YDA');
+                    $('#total-paid').html(totalPaid.toFixed(8) + ' YDA');
+                });
+
                 $.get('/shares-for-address?address=' + $('#address').val()).then((data) => {
                     $('#total-hash').html('TOTAL HASHES SUBMITTED: ' + data.total_hash)
+                });
+                $.get('/hashrate-for-address?address=' + $('#address').val()).then((data) => {
+                    $('#hash-rate').html('MINER HASH RATE: ' + formatHashRate(data.miner_hashrate));
                 });
                 $.get('/payouts-for-address?address=' + $('#address').val()).then((data) => {
                     if(data.results.length === 0) return $('#payouts-table').html('<tr>><th>Time Sent</th><th>TXN ID</th><th>Amount</th></tr>');
                     $('#payouts-table').html('');
-                    $('#payouts-table').append('<tr><th>Time Sent</th><th>TXN ID</th><th>Amount</th></tr>');
+                    $('#payouts-table').append('<tr><th>Time Sent</th><th>For Block</th><th>TXN ID</th><th>Amount</th></tr>');
+                    var totalAmount = 0;
                     for(var i=0; i < data.results.length; i++) {
-                        var selectOutput = {};
-                        var newDate = new Date();
-                        newDate.setTime(data.results[i]['txn'].time*1000);
-                        dateString = newDate.toLocaleString();
-                        for(var j=0; j < data.results[i]['txn'].outputs.length; j++) {
-                            if(data.results[i]['txn'].outputs[j].to === $('#address').val()) {
-                                selectOutput = data.results[i]['txn'].outputs[j];
-                            }
-                        }
-                    $('#payouts-table').append('<tr><td>' + dateString + '<td><a target="_blank" href="https://yadacoin.io/explorer?term=' + data.results[i]['txn'].id + '">' + data.results[i]['txn'].id + '</a></td><td>' + parseFloat(selectOutput.value).toFixed(8) + ' YDA' + '</td></tr>');
+                      var selectOutput = {};
+                      var newDate = new Date();
+                      newDate.setTime(data.results[i]['txn'].time*1000);
+                      dateString = newDate.toLocaleString();
+                      var blockIndex = data.results[i]['index'];
+                      for(var j=0; j < data.results[i]['txn'].outputs.length; j++) {
+                          if(data.results[i]['txn'].outputs[j].to === $('#address').val()) {
+                              selectOutput = data.results[i]['txn'].outputs[j];
+                          }
+                      }
+                      var amount = parseFloat(selectOutput.value).toFixed(8);
+                      totalAmount += parseFloat(amount); // Dodaj aktualny amount do sumy
+                      $('#payouts-table').append('<tr><td>' + dateString + '</td><td>' + blockIndex + '</td><td><a target="_blank" href="https://yadacoin.io/explorer?term=' + data.results[i]['txn'].id + '">' + data.results[i]['txn'].id + '</a></td><td>' + parseFloat(selectOutput.value).toFixed(8) + ' YDA' + '</td></tr>');
                     }
-                });
-                $.get('/hashrate-for-address?address=' + $('#address').val()).then((data) => {
-                    $('#hash-rate').html('MINER HASH RATE: ' + formatHashRate(data.miner_hashrate));
+                    $('#payouts-table').append('<tr><td></td><td></td><td>Total Paid: </td><td>' + totalAmount.toFixed(8) + ' YDA</td></tr>');
                 });
             });
         });
