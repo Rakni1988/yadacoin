@@ -23,6 +23,7 @@ class PoolPayer(object):
         # first check which blocks we won.
         # then determine if we have already paid out
         # they must be 6 blocks deep
+
         if not already_paid_height:
             already_paid_height = (
                 await self.config.mongo.async_db.share_payout.find_one(
@@ -31,6 +32,10 @@ class PoolPayer(object):
             )
             if not already_paid_height:
                 already_paid_height = {}
+            else:
+                already_paid_height = {"index": max(already_paid_height.get("index", []))}
+
+        self.app_log.info("already_paid_height: %s", already_paid_height)
 
         won_blocks = self.config.mongo.async_db.blocks.aggregate(
             [
@@ -74,7 +79,7 @@ class PoolPayer(object):
                    self.app_log.debug(won_block.index)
 
             confirmations = self.config.LatestBlock.block.index - won_block.index
-            if confirmations < 6:
+            if confirmations < 6: # We set the block maturation
                 if self.config.debug:
                     self.app_log.debug("Payment stopped, block has insufficient confirmations.")
                 continue
