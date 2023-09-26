@@ -174,11 +174,6 @@ class NonceProcessorHealth(HealthItem):
 
 
 class PoolPayerHealth(HealthItem):
-    def __init__(self):
-        super().__init__()
-        self.config = yadacoin.core.config.Config()
-        self.timeout = self.config.pool_payer_wait + 10
-
     async def check_health(self):
         if not self.config.pp:
             return self.report_status(True, ignore=True)
@@ -188,6 +183,7 @@ class PoolPayerHealth(HealthItem):
             return self.report_status(False)
 
         return self.report_status(True)
+    timeout = 610
 
 
 class CacheValidatorHealth(HealthItem):
