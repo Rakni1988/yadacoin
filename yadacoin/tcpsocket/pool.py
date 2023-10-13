@@ -52,12 +52,20 @@ class StratumServer(RPCSocketServer):
         cls.current_header = cls.config.mp.block_factory.header
         result = {"id": job.id, "job": job.to_dict()}
         rpc_data = {"id": 1, "method": "job", "jsonrpc": 2.0, "result": result}
-        try:
-            await stream.write("{}\n".format(json.dumps(rpc_data)).encode())
-        except StreamClosedError:
-            await StratumServer.remove_peer(stream)
-        except Exception:
-            cls.config.app_log.warning(traceback.format_exc())
+
+        cls.config.app_log.info(f"Sent job to Miner: {stream.peer.to_json()}")
+        cls.config.app_log.debug(f"Job data: {job.to_dict()}")
+
+        for _ in range(3):
+            try:
+                await stream.write("{}\n".format(json.dumps(rpc_data)).encode())
+                break
+            except StreamClosedError:
+                await StratumServer.remove_peer(stream)
+                break
+            except Exception as e:
+                cls.config.app_log.warning(f"Error sending job to miner: {e}")
+                await asyncio.sleep(2)
 
     @classmethod
     async def update_miner_count(cls):
