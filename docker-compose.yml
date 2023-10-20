@@ -26,8 +26,9 @@ services:
       resources:
         limits:
           cpus: "0.40"
-    memswap_limit: 0
-
+        reservations:
+          memory: 0.65G  # physical memory for the Yada node
+        memswap_limit: 1G  # extra 350MB in swap file
   mongodb:
     image: mongo:latest
     ports:
@@ -44,7 +45,9 @@ services:
       resources:
         limits:
           cpus: "0.40"
-    memswap_limit: 0
+        reservations:
+          memory: 1.15G  # physical memory for the Mongo
+        memswap_limit: 2.15G  # extra 1GB in swap file, can be increased if necessary
 
   restore:
     image: mongo:latest
