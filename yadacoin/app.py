@@ -103,6 +103,13 @@ define(
     help="Value to override mongodb_host config value",
     type=str,
 )
+define(
+    "modes",
+    default=[],
+    type=str,
+    multiple=True,
+    help="Operation modes. node, web, pool",
+)
 
 
 class WorkerVars:
@@ -204,6 +211,9 @@ class NodeApplication(Application):
             del self.config.nodeClient.outbound_streams[stream.peer.__class__.__name__][
                 id_attr
             ]
+            self.config.nodeClient.outbound_ignore[stream.peer.__class__.__name__][
+                stream.peer.identity.username_signature
+            ]
 
         if (
             id_attr
@@ -211,6 +221,9 @@ class NodeApplication(Application):
         ):
             del self.config.nodeClient.outbound_pending[stream.peer.__class__.__name__][
                 id_attr
+            ]
+            self.config.nodeClient.outbound_ignore[stream.peer.__class__.__name__][
+                stream.peer.identity.username_signature
             ]
 
     async def background_peers(self):
@@ -499,17 +512,16 @@ class NodeApplication(Application):
 
             try:
                 if self.config.processing_queues.block_queue.queue:
-                    if (time() - self.config.health.block_inserter.last_activity) > 1:
-                        self.config.processing_queues.block_queue.time_sum_start()
-                        await self.config.consensus.process_block_queue()
-                        self.config.processing_queues.block_queue.time_sum_end()
+                    self.config.processing_queues.block_queue.time_sum_start()
+                    await self.config.consensus.process_block_queue()
+                    self.config.processing_queues.block_queue.time_sum_end()
                 self.config.health.block_inserter.last_activity = int(time())
             except:
                 self.config.app_log.error(format_exc())
                 self.config.processing_queues.block_queue.time_sum_end()
 
             synced = await Peer.is_synced()
-            if not synced:
+            if not synced and self.config.processing_queues.block_queue.queue:
                 continue
             break
         self.config.background_block_queue_processor.busy = False
@@ -694,6 +706,8 @@ class NodeApplication(Application):
         self.config.reset = options.reset
         if options.mongohost:
             self.config.mongodb_host = options.mongohost
+        if options.modes:
+            self.config.modes = options.modes
 
     def init_consensus(self):
         self.config.consensus = tornado.ioloop.IOLoop.current().run_sync(
