@@ -456,7 +456,7 @@ class Transaction(object):
     async def verify(self, check_input_spent=False, check_max_inputs=False):
         from yadacoin.contracts.base import Contract
 
-        if check_max_inputs and len(self.inputs) > CHAIN.MAX_INPUTS:
+        if len(self.inputs) > CHAIN.MAX_INPUTS:
             raise TooManyInputsException(
                 f"Maximum inputs of {CHAIN.MAX_INPUTS} exceeded."
             )
