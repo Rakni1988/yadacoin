@@ -3,6 +3,7 @@ import hashlib
 import random
 import sys
 import time
+import asyncio
 
 from coincurve._libsecp256k1 import ffi
 from coincurve.keys import PrivateKey
@@ -202,7 +203,8 @@ class TU(object):  # Transaction Utilities
                     config.nodeClient.retry_messages[
                         (peer_stream.peer.rid, "newtxn", x.transaction_signature)
                     ] = {"transaction": x.to_dict()}
-                time.sleep(0.1)
+                await asyncio.sleep(1)
+        return
 
     @classmethod
     async def rebroadcast_failed(cls, config, id):
