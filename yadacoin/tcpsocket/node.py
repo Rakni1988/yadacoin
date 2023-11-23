@@ -29,7 +29,7 @@ from yadacoin.enums.peertypes import PEER_TYPES
 from yadacoin.tcpsocket.base import BaseRPC, RPCSocketClient, RPCSocketServer
 
 
-class DisconnectTracker:
+class NodeServerDisconnectTracker:
     by_host = {}
     by_reason = {}
 
@@ -37,7 +37,23 @@ class DisconnectTracker:
         return {"by_host": self.by_host, "by_reason": self.by_reason}
 
 
-class NewTxnTracker:
+class NodeServerNewTxnTracker:
+    by_host = {}
+    by_txn_id = {}
+
+    def to_dict(self):
+        return {"by_host": self.by_host, "by_txn_id": self.by_txn_id}
+
+
+class NodeClientDisconnectTracker:
+    by_host = {}
+    by_reason = {}
+
+    def to_dict(self):
+        return {"by_host": self.by_host, "by_reason": self.by_reason}
+
+
+class NodeClientNewTxnTracker:
     by_host = {}
     by_txn_id = {}
 
@@ -386,6 +402,7 @@ class NodeRPC(BaseRPC):
             #await self.send_mempool(stream)
             return
         self.config.consensus.syncing = True
+        stream.synced = False
         blocks = [await Block.from_dict(x) for x in blocks]
         first_inbound_block = blocks[0]
         forward_blocks_chain = await self.config.consensus.build_remote_chain(
@@ -791,8 +808,8 @@ class NodeRPC(BaseRPC):
 
 class NodeSocketServer(RPCSocketServer, NodeRPC):
     retry_messages = {}
-    newtxn_tracker = NewTxnTracker()
-    disconnect_tracker = DisconnectTracker()
+    disconnect_tracker = NodeServerDisconnectTracker()
+    newtxn_tracker = NodeServerNewTxnTracker()
 
     def __init__(self):
         super(NodeSocketServer, self).__init__()
@@ -801,8 +818,8 @@ class NodeSocketServer(RPCSocketServer, NodeRPC):
 
 class NodeSocketClient(RPCSocketClient, NodeRPC):
     retry_messages = {}
-    newtxn_tracker = NewTxnTracker()
-    disconnect_tracker = DisconnectTracker()
+    disconnect_tracker = NodeClientDisconnectTracker()
+    newtxn_tracker = NodeClientNewTxnTracker()
 
     def __init__(self):
         super(NodeSocketClient, self).__init__()
