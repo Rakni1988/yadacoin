@@ -527,7 +527,7 @@ class NodeApplication(Application):
         try:
             synced = await Peer.is_synced()
             skip = True
-            if time() - self.config.background_block_queue_processor.consensus_last_activity >= 60:
+            if time() - self.config.background_block_queue_processor.consensus_last_activity >= 15:
                 self.config.background_block_queue_processor.consensus_last_activity = int(time())
                 skip = False
             else:
