@@ -131,19 +131,21 @@ class Consensus(object):
                     return
 
                 if block.index > (self.config.LatestBlock.block.index + 100):
+                    difference = block.index - self.config.LatestBlock.block.index
                     self.config.app_log.info(
-                        "newblock, block index greater than latest block + 100"
+                        f"Received a new block with index {block.index}. Remaining blocks to synchronize: {difference}"
                     )
                     return
 
                 if block.index < self.config.LatestBlock.block.index:
-                    await self.config.nodeShared.write_params(
-                        stream,
-                        "newblock",
-                        {"payload": {"block": self.config.LatestBlock.block.to_dict()}},
-                    )
                     self.config.app_log.info(
                         f"block index less than our latest block index: {block.index} < {self.config.LatestBlock.block.index} | {stream.peer.identity.to_dict}"
+                    )
+                    return
+
+                if block.signature == self.config.LatestBlock.block.signature and block.index == self.config.LatestBlock.block.index:
+                    self.config.app_log.info(
+                        "Received block is the same as the latest block"
                     )
                     return
 
