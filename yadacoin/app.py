@@ -341,42 +341,49 @@ class NodeApplication(Application):
         """
         self.config.app_log.debug("background_block_checker")
         if not hasattr(self.config, "background_block_checker"):
-            self.config.background_block_checker = WorkerVars(busy=False, last_send=0)
+            self.config.background_block_checker = WorkerVars(busy=False, last_send=int(time()), last_block_height=0, first_run=True)
+
         if self.config.background_block_checker.busy:
             return
         self.config.background_block_checker.busy = True
-        try:
-            self.config.background_block_checker.last_block_height = 0
-            if LatestBlock.block:
-                self.config.background_block_checker.last_block_height = (
-                    LatestBlock.block.index
-                )
-            await LatestBlock.block_checker()
-            if (
-                self.config.background_block_checker.last_block_height
-                != LatestBlock.block.index
-            ):
-                self.config.app_log.info(
-                    "Latest block height: %s | time: %s"
-                    % (
-                        self.config.LatestBlock.block.index,
-                        datetime.fromtimestamp(
-                            int(self.config.LatestBlock.block.time)
-                        ).strftime("%Y-%m-%d %H:%M:%S"),
-                    )
-                )
-                await self.config.nodeShared.send_block_to_peers(
-                    self.config.LatestBlock.block
-                )
-            elif int(time()) - self.config.background_block_checker.last_send > 60:
-                self.config.background_block_checker.last_send = int(time())
-                await self.config.nodeShared.send_block_to_peers(
-                    self.config.LatestBlock.block
-                )
 
+        try:
+            current_block_index = LatestBlock.block.index
+
+            if self.config.background_block_checker.last_block_height != current_block_index:
+                if self.config.background_block_checker.first_run:
+                    self.config.background_block_checker.first_run = False
+                    synced = False
+                else:
+                    synced = await Peer.is_synced()
+                if synced:
+                    self.config.app_log.info(
+                        "Latest block height: %s | time: %s"
+                        % (
+                            current_block_index,
+                            datetime.fromtimestamp(
+                                int(self.config.LatestBlock.block.time)
+                            ).strftime("%Y-%m-%d %H:%M:%S"),
+                        )
+                    )
+                    await self.config.nodeShared.send_block_to_peers(
+                        self.config.LatestBlock.block
+                    )
+                if not synced:
+                    self.config.app_log.info("Sending a new block prohibited, synchronization in progress")
+
+                self.config.background_block_checker.last_block_height = current_block_index
+
+            elif int(time()) - self.config.background_block_checker.last_send > 300:
+                self.config.background_block_checker.last_send = int(time())
+                self.config.app_log.info("Time condition met, sending Last Block to peers.")
+                await self.config.nodeShared.send_block_to_peers(
+                    self.config.LatestBlock.block
+                )
             self.config.health.block_checker.last_activity = int(time())
         except Exception:
             self.config.app_log.error(format_exc())
+
         self.config.background_block_checker.busy = False
 
     async def background_message_sender(self):
