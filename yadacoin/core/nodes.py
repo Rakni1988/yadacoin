@@ -4,13 +4,21 @@ from bitcoin.wallet import P2PKHBitcoinAddress
 
 from yadacoin.core.peer import Seed, SeedGateway, ServiceProvider
 
+from logging import getLogger
+
 
 class Nodes:
+    _app_log = getLogger("tornado.application")
+
+    def __init__(self):
+        pass
+
     @classmethod
     def set_fork_points(cls):
         cls().fork_points = []
         for NODE in cls()._NODES:
             for rng in NODE["ranges"]:
+                #cls()._app_log.info("Added fork point: {}".format(rng[0]))
                 cls().fork_points.append(rng[0])
         cls().fork_points = sorted(list(set(cls().fork_points)))
 
@@ -20,7 +28,7 @@ class Nodes:
         for fork_point in cls().fork_points:
             for NODE in cls()._NODES:
                 for rng in NODE["ranges"]:
-                    if rng[1] and rng[1] <= fork_point:
+                    if rng[1] is not None and rng[1] <= fork_point:
                         continue
                     if rng[0] <= fork_point:
                         cls().NODES[fork_point].append(NODE["node"])
@@ -30,8 +38,10 @@ class Nodes:
         prev = 0
         for x in cls().fork_points:
             if height < x:
+                #cls()._app_log.info("Using fork point {}".format(prev))
                 return prev
             prev = x
+        #cls()._app_log.info("Using fork point {}".format(prev))
         return prev
 
     _get_nodes_for_block_height_cache = {
@@ -84,7 +94,7 @@ class Seeds(Nodes):
         self.initialized = True
         self._NODES = [
             {
-                "ranges": [(0, 482760)],
+                "ranges": [(0, 482800)],
                 "node": Seed.from_dict(
                     {
                         "host": "yadacoin.io",
@@ -99,7 +109,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(0, 482760)],
+                "ranges": [(0, 482800)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.hashyada.com",
@@ -114,7 +124,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(0, 482760)],
+                "ranges": [(0, 482800)],
                 "node": Seed.from_dict(
                     {
                         "host": "seedau.hashyada.com",
@@ -129,7 +139,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(443600, 482760)],
+                "ranges": [(443600, 482800)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.crbrain.online",
@@ -144,7 +154,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(443700, 482760)],
+                "ranges": [(443700, 482800)],
                 "node": Seed.from_dict(
                     {
                         "host": "yada-alpha.mynodes.live",
@@ -159,7 +169,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(446400, 482760)],
+                "ranges": [(446400, 482800)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.yada.toksyk.pl",
@@ -174,7 +184,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(449000, 482760)],
+                "ranges": [(449000, 482800)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.darksidetx.net",
@@ -189,7 +199,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(449000, 482760)],
+                "ranges": [(449000, 482800)],
                 "node": Seed.from_dict(
                     {
                         "host": "seedno.hashyada.com",
@@ -204,7 +214,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(452000, 482760)],
+                "ranges": [(452000, 482800)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.friendspool.club",
@@ -219,7 +229,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(467200, 482760)],
+                "ranges": [(467200, 482800)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.berkinyada.xyz",
@@ -249,7 +259,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(472000, 482760)],  # UPDATED IDENTITY INFORMATION
+                "ranges": [(472000, 482800)],  # UPDATED IDENTITY INFORMATION
                 "node": Seed.from_dict(
                     {
                         "host": "seed.funckyman.xyz",
@@ -264,7 +274,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(477000, 482760)],
+                "ranges": [(477000, 482800)],
                 "node": Seed.from_dict(
                     {
                         "host": "yadaseed1.hashrank.top",
@@ -279,7 +289,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(479700, 482760)],
+                "ranges": [(479700, 482800)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.supahash.com",
@@ -294,7 +304,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(480100, 482760)],
+                "ranges": [(480100, 482800)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.nephotim.co",
@@ -328,7 +338,7 @@ class SeedGateways(Nodes):
         self.initialized = True
         self._NODES = [
             {
-                "ranges": [(0, 482760)],
+                "ranges": [(0, 482800)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "remotelyrich.com",
@@ -343,7 +353,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(0, 482760)],
+                "ranges": [(0, 482800)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgateway.hashyada.com",
@@ -358,7 +368,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(0, 482760)],
+                "ranges": [(0, 482800)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgatewayau.hashyada.com",
@@ -373,7 +383,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(443600, 482760)],
+                "ranges": [(443600, 482800)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgateway.crbrain.online",
@@ -388,7 +398,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(443700, 482760)],
+                "ranges": [(443700, 482800)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "yada-bravo.mynodes.live",
@@ -403,7 +413,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(446400, 482760)],
+                "ranges": [(446400, 482800)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgateway.yada.toksyk.pl",
@@ -418,7 +428,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(449000, 482760)],
+                "ranges": [(449000, 482800)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgateway.darksidetx.net",
@@ -433,7 +443,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(449000, 482760)],
+                "ranges": [(449000, 482800)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgatewayno.hashyada.com",
@@ -448,7 +458,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(452000, 482760)],
+                "ranges": [(452000, 482800)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgateway.friendspool.club",
@@ -463,7 +473,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(467200, 482760)],
+                "ranges": [(467200, 482800)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgat.berkinyada.xyz",
@@ -493,7 +503,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(472000, 482760)],  # UPDATED IDENTITY INFORMATION
+                "ranges": [(472000, 482800)],  # UPDATED IDENTITY INFORMATION
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgateway.funckyman.xyz",
@@ -508,7 +518,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(477000, 482760)],
+                "ranges": [(477000, 482800)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "yadaseed2.hashrank.top",
@@ -523,7 +533,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(479700, 482760)],
+                "ranges": [(479700, 482800)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgateway.supahash.com",
@@ -538,7 +548,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(480100, 482760)],
+                "ranges": [(480100, 482800)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "gateway.nephotim.co",
@@ -572,7 +582,7 @@ class ServiceProviders(Nodes):
         self.initialized = True
         self._NODES = [
             {
-                "ranges": [(0, 482760)],
+                "ranges": [(0, 482800)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "centeridentity.com",
@@ -588,7 +598,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(0, 482760)],
+                "ranges": [(0, 482800)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.hashyada.com",
@@ -604,7 +614,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(0, 482760)],
+                "ranges": [(0, 482800)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceproviderau.hashyada.com",
@@ -620,7 +630,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(443600, 482760)],
+                "ranges": [(443600, 482800)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.crbrain.online",
@@ -636,7 +646,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(443700, 482760)],
+                "ranges": [(443700, 482800)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "yada-charlie.mynodes.live",
@@ -652,7 +662,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(446400, 482760)],
+                "ranges": [(446400, 482800)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.yada.toksyk.pl",
@@ -668,7 +678,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(449000, 482760)],
+                "ranges": [(449000, 482800)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.darksidetx.net",
@@ -684,7 +694,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(449000, 482760)],
+                "ranges": [(449000, 482800)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceproviderno.hashyada.com",
@@ -700,7 +710,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(452000, 482760)],
+                "ranges": [(452000, 482800)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.friendspool.club",
@@ -716,7 +726,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(467200, 482760)],
+                "ranges": [(467200, 482800)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "servic.berkinyada.xyz",
@@ -748,7 +758,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(472000, 482760)],  # UPDATED IDENTITY INFORMATION
+                "ranges": [(472000, 482800)],  # UPDATED IDENTITY INFORMATION
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.funckyman.xyz",
@@ -764,7 +774,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(477000, 482760)],
+                "ranges": [(477000, 482800)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "yadaseed3.hashrank.top",
@@ -780,7 +790,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(479700, 482760)],
+                "ranges": [(479700, 482800)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.supahash.com",
@@ -796,7 +806,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(480100, 482760)],
+                "ranges": [(480100, 482800)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.nephotim.co",
@@ -812,7 +822,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(482760, None)],
+                "ranges": [(482800, None)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "45.151.126.94",
