@@ -52,9 +52,9 @@ class Nodes:
 
     @classmethod
     def get_nodes_for_block_height(cls, height):
-        fork_point = cls().get_fork_for_block_height(height)
+        fork_point = cls().get_fork_for_block_height(height + 1)
         if fork_point is None:
-            fork_point = cls().get_fork_for_block_height(height)
+            fork_point = cls().get_fork_for_block_height(height + 1)
         if fork_point not in cls()._get_nodes_for_block_height_cache[cls.__name__]:
             cls()._get_nodes_for_block_height_cache[cls.__name__][
                 fork_point
@@ -64,14 +64,14 @@ class Nodes:
     @classmethod
     def get_all_nodes_for_block_height(cls, height):
         return (
-            Seeds.get_nodes_for_block_height(height)
-            + SeedGateways.get_nodes_for_block_height(height)
-            + ServiceProviders.get_nodes_for_block_height(height),
+            Seeds.get_nodes_for_block_height(height + 1)
+            + SeedGateways.get_nodes_for_block_height(height + 1)
+            + ServiceProviders.get_nodes_for_block_height(height + 1),
         )[0]
 
     @classmethod
     def get_all_nodes_indexed_by_address_for_block_height(cls, height):
-        nodes = cls().get_all_nodes_for_block_height(height)
+        nodes = cls().get_all_nodes_for_block_height(height + 1)
         return {
             str(
                 P2PKHBitcoinAddress.from_pubkey(bytes.fromhex(node.identity.public_key))
@@ -318,6 +318,21 @@ class Seeds(Nodes):
                     }
                 ),
             },
+            {
+                "ranges": [(482800, None)],
+                "node": Seed.from_dict(
+                    {
+                        "host": "seed.yadaminers.pl",
+                        "port": 8000,
+                        "identity": {
+                            "username": "",
+                            "username_signature": "MEQCICpNCiUo/a2yNAU8Jf1fYFzX+13aUsV+zAi3UuY/rD9EAiAbykyNZo52cwoIMfAKQYjSB9s48P1gIOVgp4kyyq6VAA==",
+                            "public_key": "0297c4068498342a37759f0198fa6a816bbb2b91a9c64142da41fcb3b9cb65844c",
+                        },
+                        "seed_gateway": "MEUCIQDzawJsltO8W23JyxJ2jRvp5dkw3EV4+goD7i58eX23UwIgaTCE4G6D4FlwPzjxozc2nS9TMoUnj5DZw68Vwu6Lnyo=",
+                    }
+                ),
+            },
         ]
 
         Seeds.set_fork_points()
@@ -559,6 +574,21 @@ class SeedGateways(Nodes):
                             "public_key": "0393110452c520d98ebf69bfadf8db36719c3de1b42ef31f31e81523fb87d7b8db",
                         },
                         "seed": "MEQCICV3BfyeG/d3wthW5L9nWYZYejExBHAhJVlzW5iiTjs8AiAQNq0HnPNAm91ymsKu740lgfWwYcUs8gJHuiS9tz5fAA==",
+                    }
+                ),
+            },
+            {
+                "ranges": [(482800, None)],
+                "node": SeedGateway.from_dict(
+                    {
+                        "host": "sg.yadaminers.pl",
+                        "port": 8000,
+                        "identity": {
+                            "username": "",
+                            "username_signature": "MEUCIQDzawJsltO8W23JyxJ2jRvp5dkw3EV4+goD7i58eX23UwIgaTCE4G6D4FlwPzjxozc2nS9TMoUnj5DZw68Vwu6Lnyo=",
+                            "public_key": "03a934d238c569bb5b9b10dc2cdb791553e34fc28ff94b3f5cda1f0878ab406c67",
+                        },
+                        "seed": "MEQCICpNCiUo/a2yNAU8Jf1fYFzX+13aUsV+zAi3UuY/rD9EAiAbykyNZo52cwoIMfAKQYjSB9s48P1gIOVgp4kyyq6VAA==",
                     }
                 ),
             },
@@ -832,8 +862,8 @@ class ServiceProviders(Nodes):
                             "username_signature": "MEUCIQCEI8e2bXOUhfcsZoCajZaCAeJ/fDQHhLtEJ5KOVxaqAwIgWMk1ZG6KLjJq5gU6WiWmmVVxnZ+dAC1M5MuASI7ulfE=",
                             "public_key": "03834413e444fd2a7065e99ea93a64e3fc9ea3a2b955a1ee3226bdc6a054d105a5",
                         },
-                        "seed_gateway": "",
-                        "seed": "",
+                        "seed_gateway": "MEUCIQDzawJsltO8W23JyxJ2jRvp5dkw3EV4+goD7i58eX23UwIgaTCE4G6D4FlwPzjxozc2nS9TMoUnj5DZw68Vwu6Lnyo=",
+                        "seed": "MEQCICpNCiUo/a2yNAU8Jf1fYFzX+13aUsV+zAi3UuY/rD9EAiAbykyNZo52cwoIMfAKQYjSB9s48P1gIOVgp4kyyq6VAA==",
                     }
                 ),
             },
