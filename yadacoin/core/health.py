@@ -8,7 +8,7 @@ from yadacoin.enums.modes import MODES
 
 class HealthItem:
     last_activity = time.time()
-    timeout = 120
+    timeout = 300
     status = True
     ignore = False
 

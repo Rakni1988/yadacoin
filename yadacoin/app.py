@@ -410,7 +410,7 @@ class NodeApplication(Application):
                     self.config.background_block_checker.last_block_height = current_block_index
                     self.config.background_block_checker.last_block_hash = current_block_hash
 
-                elif int(time()) - self.config.background_block_checker.last_send > 600:
+                elif int(time()) - self.config.background_block_checker.last_send > 300:
                     self.config.background_block_checker.last_send = int(time())
                     self.config.app_log.info("Time condition met, sending Last Block to peers.")
                     await self.config.nodeShared.send_block_to_peers(
@@ -770,6 +770,7 @@ class NodeApplication(Application):
         self.config.background_mempool_cleaner.busy = True
         try:
             await self.config.TU.clean_mempool(self.config)
+            await self.config.TU.combine_oldest_transactions(self.config)
             await self.config.mp.clean_pool_info()
             await self.config.mp.clean_shares()
             self.config.health.mempool_cleaner.last_activity = int(time())
