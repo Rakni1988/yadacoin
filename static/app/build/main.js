@@ -5283,7 +5283,7 @@ var SendReceive = /** @class */ (function () {
                         _this.loadingModal.dismiss().catch(function () { });
                         throw "insufficient funds";
                     }
-                    if (_this.walletService.wallet.unspent_transactions.length > 100) {
+                    if (_this.walletService.wallet.unspent_transactions.length > 1000) {
                         var title = "Too many inputs";
                         var message = "This transaction requires too many inputs. Send a smaller amount.";
                         var alert = _this.alertCtrl.create();

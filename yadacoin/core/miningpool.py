@@ -335,7 +335,7 @@ class MiningPool(object):
         difficulty = int(self.max_target / self.block_factory.target)
         seed_hash = "4181a493b397a733b083639334bc32b407915b9a82b7917ac361816f0a1f5d4d"  # sha256(yadacoin65000)
         job_id = str(uuid.uuid4())
-        extra_nonce = secrets.token_hex(2)
+        extra_nonce = secrets.token_hex(1)
         header = self.block_factory.header
         self.config.app_log.debug(f"Job header: {header}")
         blob = header.encode().hex().replace("7b6e6f6e63657d", "00000000" + extra_nonce)
@@ -409,6 +409,7 @@ class MiningPool(object):
         mempool_smart_contract_objs = {}
         transaction_objs = {}
         used_sigs = []
+        total_inputs_count = 0
 
         check_max_inputs = False
         if self.config.LatestBlock.block.index + 1 > CHAIN.CHECK_MAX_INPUTS_FORK:
@@ -449,8 +450,17 @@ class MiningPool(object):
             if transaction_obj.private == True:
                 transaction_obj.relationship = ""
 
+            # calculate inputs number
+            inputs_count = len(txn["inputs"])
+            self.config.app_log.info(f"Total inputs count: {total_inputs_count}")
+
+            if total_inputs_count + inputs_count >= 1000:
+                self.config.app_log.info("Total inputs count exceeded 1000. Stopping.")
+                break
+
             transaction_objs.setdefault(transaction_obj.requested_rid, [])
             transaction_objs[transaction_obj.requested_rid].append(transaction_obj)
+            total_inputs_count += inputs_count  # sum inputs
 
         # process recurring payments
         generated_txns = []
