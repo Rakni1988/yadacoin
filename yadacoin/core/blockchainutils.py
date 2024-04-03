@@ -188,18 +188,45 @@ class BlockChainUtils(object):
         unspent_txns_query.extend(
             [
                 {"$match": {"transactions.id": {"$nin": list(spent_ids)}}},
-                {"$sort": {"transactions.outputs.value": 1}},
+                {"$sort": {"transactions.time": 1}},  # Change sorting on time
             ]
         )
 
-        async for unspent_txn in self.config.mongo.async_db.blocks.aggregate(
+        unspent_transactions = {}
+        async for block in self.config.mongo.async_db.blocks.aggregate(
             unspent_txns_query, allowDiskUse=True, hint="__to"
         ):
-            unspent_txn["transactions"]["height"] = unspent_txn["index"]
-            unspent_txn["transactions"]["outputs"] = [
-                unspent_txn["transactions"]["outputs"]
-            ]
-            yield unspent_txn["transactions"]
+            #self.app_log.info(f"Processing block: {block}")
+            transaction = block.get("transactions")
+            if transaction:
+                txn_id = transaction["id"]
+                if txn_id not in unspent_transactions:
+                    unspent_transactions[txn_id] = {
+                        "transactions": transaction,
+                        "index": block.get("index"),
+                        "outputs": {},
+                    }
+                
+                outputs = transaction.get("outputs")
+                if isinstance(outputs, dict):
+                    outputs = [outputs]
+                    
+                for output in outputs:
+                    to_address = output.get("to")
+                    value = output.get("value")
+                    if to_address is not None and value is not None:
+                        if to_address not in unspent_transactions[txn_id]["outputs"]:
+                            unspent_transactions[txn_id]["outputs"][to_address] = value
+                        else:
+                            unspent_transactions[txn_id]["outputs"][to_address] += value
+                #self.app_log.info(f"Processed transaction: {transaction}")
+
+        for txn_data in unspent_transactions.values():
+            merged_txn = txn_data["transactions"]
+            merged_txn["outputs"] = [{"to": to_address, "value": value} for to_address, value in txn_data["outputs"].items()]
+            merged_txn["height"] = txn_data.get("index")
+            #self.app_log.info(f"Found unspent UTXO: {merged_txn}")
+            yield merged_txn
 
     async def get_transactions(
         self, wif, query, queryType, raw=False, both=True, skip=None

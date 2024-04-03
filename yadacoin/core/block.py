@@ -327,7 +327,10 @@ class Block(object):
             cls.successful_nodes = successful_nodes
             config.app_log.info("Save the result.")
 
-            return successful_nodes
+            if not successful_nodes:
+                return nodes
+            else:
+                return successful_nodes
         else:
             config.app_log.info(
                 f"Testing nodes skipped. Current block height ({LatestBlock.block.index}) is below the specified threshold ({CHAIN.PAY_MASTER_NODES_FORK})."

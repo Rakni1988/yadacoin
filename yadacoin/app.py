@@ -770,7 +770,8 @@ class NodeApplication(Application):
         self.config.background_mempool_cleaner.busy = True
         try:
             await self.config.TU.clean_mempool(self.config)
-            await self.config.TU.combine_oldest_transactions(self.config)
+            #await self.config.TU.split_transactions(self.config)
+            #await self.config.TU.combine_oldest_transactions(self.config)
             await self.config.mp.clean_pool_info()
             await self.config.mp.clean_shares()
             self.config.health.mempool_cleaner.last_activity = int(time())
