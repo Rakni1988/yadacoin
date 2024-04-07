@@ -54,7 +54,6 @@ class ExplorerHandler(BaseHandler):
             mixpanel="explorer page",
         )
 
-
 class ExplorerSearchHandler(BaseHandler):
     async def get_wallet_balance(self, term):
         re.search(r"[A-Fa-f0-9]+", term).group(0)
@@ -63,18 +62,31 @@ class ExplorerSearchHandler(BaseHandler):
         )
         if res:
             balance = await self.config.BU.get_wallet_balance(term)
+            blocks = await self.config.mongo.async_db.blocks.find(
+                {"transactions.outputs.to": term},
+                {"_id": 0, "index": 1, "time": 1, "hash": 1, "transactions": 1},
+            ).sort("index", -1).to_list(length=None)
+
+            result = [
+                {
+                    "index": block["index"],
+                    "time": block["time"],
+                    "hash": block["hash"],
+                    "transactions": [
+                        txn
+                        for txn in block.get("transactions", [])
+                        if any(output.get("to") == term for output in txn.get("outputs", []))
+                    ],
+                }
+                for block in blocks
+            ]
+
             return self.render_as_json(
                 {
                     "balance": "{0:.8f}".format(balance),
                     "resultType": "txn_outputs_to",
-                    "result": [
-                        changetime(x)
-                        async for x in self.config.mongo.async_db.blocks.find(
-                            {"transactions.outputs.to": term}, {"_id": 0}
-                        )
-                        .sort("index", -1)
-                        .limit(10)
-                    ],
+                    "searchedId": term,
+                    "result": result,
                 }
             )
 
@@ -187,22 +199,46 @@ class ExplorerSearchHandler(BaseHandler):
 
         try:
             re.search(r"[A-Fa-f0-9]{64}", term).group(0)
-            res = await self.config.mongo.async_db.blocks.count_documents(
-                {"transactions.hash": term}
-            )
-            if res:
-                return self.render_as_json(
+
+            transactions = await self.config.mongo.async_db.blocks.aggregate(
+                [
                     {
-                        "resultType": "txn_hash",
-                        "result": [
-                            changetime(x)
-                            async for x in self.config.mongo.async_db.blocks.find(
-                                {"transactions.hash": term}, {"_id": 0}
-                            )
-                        ],
+                        "$match": {
+                            "transactions.hash": term,
+                        }
+                    },
+                    {
+                        "$unwind": "$transactions"
+                    },
+                    {
+                        "$match": {
+                            "transactions.hash": term
+                        }
+                    },
+                    {
+                        "$project": {
+                            "_id": 0,
+                            "result": [{
+                                "$mergeObjects": ["$transactions", {
+                                    "blockIndex": "$index",
+                                    "blockHash": "$hash"
+                                }]
+                            }],
+                        }
                     }
-                )
-        except:
+                ]
+            ).to_list(None)
+
+            return self.render_as_json(
+                {
+                    "resultType": "txn_hash",
+                    "searchedId": term,
+                    "result": transactions[0]["result"],
+                }
+            )
+
+        except Exception as e:
+            print(f"Error processing transaction hash: {e}")
             pass
 
         try:
@@ -226,38 +262,78 @@ class ExplorerSearchHandler(BaseHandler):
             pass
 
         try:
-            base64.b64decode(term.replace(" ", "+"))
-            res = await self.config.mongo.async_db.blocks.count_documents(
+            decoded_term = base64.b64decode(term.replace(" ", "+"))
+            searched_id = term.replace(" ", "+")
+
+            pipeline = [
                 {
-                    "$or": [
-                        {"transactions.id": term.replace(" ", "+")},
-                        {"transactions.inputs.id": term.replace(" ", "+")},
-                    ]
-                }
-            )
-            if res:
-                return self.render_as_json(
-                    {
-                        "resultType": "txn_id",
-                        "result": [
-                            changetime(x)
-                            async for x in self.config.mongo.async_db.blocks.find(
-                                {
+                    "$match": {
+                        "$or": [
+                            {"transactions.id": searched_id},
+                            {"transactions.inputs.id": searched_id},
+                        ]
+                    }
+                },
+                {
+                    "$project": {
+                        "_id": 0,
+                        "blockIndex": "$index",
+                        "blockHash": "$hash",
+                        "transactions": {
+                            "$filter": {
+                                "input": "$transactions",
+                                "as": "transaction",
+                                "cond": {
                                     "$or": [
-                                        {"transactions.id": term.replace(" ", "+")},
+                                        {"$eq": ["$$transaction.id", searched_id]},
                                         {
-                                            "transactions.inputs.id": term.replace(
-                                                " ", "+"
-                                            )
+                                            "$anyElementTrue": {
+                                                "$map": {
+                                                    "input": "$$transaction.inputs",
+                                                    "as": "input",
+                                                    "in": {"$eq": ["$$input.id", searched_id]},
+                                                }
+                                            }
                                         },
                                     ]
                                 },
-                                {"_id": 0},
-                            )
-                        ],
+                            }
+                        },
+                    },
+                },
+                {
+                    "$unwind": "$transactions"
+                },
+                {
+                    "$project": {
+                        "_id": 0,
+                        "result": {
+                            "$mergeObjects": ["$transactions", {
+                                "blockIndex": "$blockIndex",
+                                "blockHash": "$blockHash"
+                            }]
+                        },
                     }
-                )
-        except:
+                },
+            ]
+
+            result = await self.config.mongo.async_db.blocks.aggregate(pipeline).to_list(length=None)
+            transactions = [block["result"] for block in result if block.get("result")]
+
+            return self.render_as_json(
+                {
+                    "resultType": "txn_id",
+                    "searchedId": searched_id,
+                    "result": transactions,
+                }
+            )
+
+        except Exception as e:
+            print(f"Error processing transaction ID: {e}")
+            pass
+
+        except Exception as e:
+            print(f"Error processing transaction ID: {e}")
             pass
 
         try:
@@ -273,37 +349,42 @@ class ExplorerSearchHandler(BaseHandler):
                 {"id": term.replace(" ", "+")}
             )
             if res:
+                results = [
+                    changetime(x)
+                    async for x in self.config.mongo.async_db.miner_transactions.find(
+                        {"id": term.replace(" ", "+")}, {"_id": 0}
+                    )
+                ]
                 return self.render_as_json(
                     {
                         "resultType": "mempool_id",
-                        "result": [
-                            changetime(x)
-                            async for x in self.config.mongo.async_db.miner_transactions.find(
-                                {"id": term.replace(" ", "+")}, {"_id": 0}
-                            )
-                        ],
+                        "searchedId": term.replace(" ", "+"),
+                        "result": results,
                     }
                 )
         except:
             pass
 
         try:
-            re.search(r"[A-Fa-f0-9]{64}", term).group(0)
-            res = await self.config.mongo.async_db.miner_transactions.count_documents(
-                {"hash": term}
-            )
-            if res:
-                return self.render_as_json(
-                    {
-                        "resultType": "mempool_hash",
-                        "result": [
-                            changetime(x)
-                            async for x in self.config.mongo.async_db.miner_transactions.find(
-                                {"hash": term}, {"_id": 0}
-                            )
-                        ],
-                    }
+            match = re.search(r"[A-Fa-f0-9]{64}", term)
+            if match:
+                res = await self.config.mongo.async_db.miner_transactions.count_documents(
+                    {"hash": term}
                 )
+                if res:
+                    results = [
+                        changetime(x)
+                        async for x in self.config.mongo.async_db.miner_transactions.find(
+                            {"hash": term}, {"_id": 0}
+                        )
+                    ]
+                    return self.render_as_json(
+                        {
+                            "resultType": "mempool_hash",
+                            "searchedId": term,
+                            "result": results,
+                        }
+                    )
         except:
             pass
 
@@ -496,7 +577,7 @@ class ExplorerLatestHandler(BaseHandler):
         res = await res.to_list(length=10)
         print(res[0])
         return self.render_as_json(
-            {"resultType": "blocks", "result": [changetime(x) for x in res]}
+            {"resultType": "blocks", "result": res}
         )
 
 
@@ -529,6 +610,14 @@ class ExplorerLast50(BaseHandler):
 
         return self.render_as_json(miners)
 
+class ExplorerMempoolHandler(BaseHandler):
+    async def get(self):
+        """Returns mempool data from miner_transactions collection"""
+        res = await self.config.mongo.async_db.miner_transactions.find({}).to_list(None)
+        return self.render_as_json(
+            {"resultType": "mempool", "result": res}
+        )
+
 
 EXPLORER_HANDLERS = [
     (r"/api-stats", HashrateAPIHandler),
@@ -537,4 +626,5 @@ EXPLORER_HANDLERS = [
     (r"/explorer-get-balance", ExplorerGetBalance),
     (r"/explorer-latest", ExplorerLatestHandler),
     (r"/explorer-last50", ExplorerLast50),
+    (r"/explorer-mempool", ExplorerMempoolHandler),
 ]
