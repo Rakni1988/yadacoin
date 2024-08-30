@@ -4,6 +4,7 @@ Handlers required by the core chain operations
 
 import json
 import time
+import tornado.web
 
 from tornado import escape
 
@@ -11,6 +12,10 @@ from yadacoin.core.chain import CHAIN
 from yadacoin.core.transaction import Transaction
 from yadacoin.core.transactionutils import TU
 from yadacoin.http.base import BaseHandler
+from yadacoin.core.blockchain import Blockchain
+from yadacoin.core.processingqueue import BlockProcessingQueueItem
+from yadacoin.core.block import Block
+from yadacoin.core.latestblock import LatestBlock
 
 
 class GetLatestBlockHandler(BaseHandler):
