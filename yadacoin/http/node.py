@@ -216,6 +216,15 @@ class GetPendingTransactionIdsHandler(BaseHandler):
         return self.render_as_json({"txn_ids": [x["id"] for x in txns]})
 
 
+class GetMempoolTransactionsHandler(BaseHandler):
+    async def get(self):
+        try:
+            transactions = await self.config.mongo.async_db.miner_transactions.find({}).to_list(length=None)
+            self.render_as_json({"transactions": transactions})
+        except Exception as e:
+            self.render_as_json({"error": str(e)}, status=500)
+
+
 class RebroadcastTransactions(BaseHandler):
     async def get(self):
         await self.config.TU.rebroadcast_mempool(self.config)
@@ -360,6 +369,44 @@ class GetMonitoringHandler(BaseHandler):
         op_data["pool"] = pool_data
         self.render_as_json(op_data, indent=4)
 
+class GetBlockTemplateHandler(BaseHandler):
+    async def get(self):
+        try:
+            block_template = await LatestBlock.get_block_template()
+            if block_template:
+                self.write(block_template)
+            else:
+                self.config.app_log.error("Failed to retrieve block template: block_template is None.")
+                self.set_status(500)
+                self.write({"error": "Failed to retrieve block template."})
+        except Exception as e:
+            self.config.app_log.error(f"Exception occurred in GetBlockTemplateHandler: {str(e)}")
+            self.set_status(500)
+            self.write({"error": str(e)})
+
+class SubmitBlockHandler(BaseHandler):
+    async def post(self):
+        try:
+            block_data = escape.json_decode(self.request.body)
+            block = await Block.from_dict(block_data)
+            self.config.app_log.info(f"Received block data: {block_data}")
+            
+            await self.config.consensus.insert_consensus_block(block, self.config.peer)
+
+            self.config.processing_queues.block_queue.add(
+                BlockProcessingQueueItem(Blockchain(block.to_dict()))
+            )
+
+            await self.config.nodeShared.send_block_to_peers(block)
+            await self.config.websocketServer.send_block(block)
+
+            self.write({"status": "success", "message": "Block accepted"})
+            self.config.app_log.info(f"Block accepted: {block.hash}")
+
+        except Exception as e:
+            self.write({"status": "error", "message": str(e)})
+            self.config.app_log.info(f"Failed to submit block: {e}")
+
 
 NODE_HANDLERS = [
     (r"/get-latest-block", GetLatestBlockHandler),
@@ -371,6 +418,7 @@ NODE_HANDLERS = [
     (r"/get-status", GetStatusHandler),
     (r"/get-pending-transaction", GetPendingTransactionHandler),
     (r"/get-pending-transaction-ids", GetPendingTransactionIdsHandler),
+    (r"/get-mempool-transactions", GetMempoolTransactionsHandler),
     (r"/rebroadcast-transactions", RebroadcastTransactions),
     (r"/rebroadcast-failed-transaction", RebroadcastFailedTransactions),
     (r"/get-current-smart-contract-transactions", GetCurrentSmartContractTransactions),
@@ -379,4 +427,6 @@ NODE_HANDLERS = [
     (r"/get-expired-smart-contract-transaction", GetExpiredSmartContractTransaction),
     (r"/get-trigger-transactions", GetSmartContractTriggerTransaction),
     (r"/get-monitoring", GetMonitoringHandler),
+    (r"/get-block-template", GetBlockTemplateHandler),
+    (r"/submitblock", SubmitBlockHandler),
 ]
