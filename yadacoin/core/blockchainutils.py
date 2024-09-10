@@ -279,8 +279,9 @@ class BlockChainUtils(object):
             unspent_txns_query=query, address=address
         )
 
-    async def get_wallet_unspent_transactions_for_spending_with_cache(self, address, amount_needed=None, inc_mempool=False, batch_size=100):
-
+    async def get_wallet_unspent_transactions_for_spending_with_cache(
+        self, address, amount_needed=None, inc_mempool=False, batch_size=100
+    ):
         await self.update_utxo_cache(address)
 
         utxo_cache = await self.config.mongo.async_db.utxo_data.find_one({"address": address})
@@ -290,8 +291,9 @@ class BlockChainUtils(object):
             return []
 
         unspent_txns = utxo_cache.get("unspent_txns", [])
-        spent_txns = utxo_cache.get("spent_txns", [])
         mempool_txns = utxo_cache.get("mempool_txns", [])
+
+        spent_txns = []
 
         public_key = await self.get_reverse_public_key(address)
 
@@ -303,7 +305,7 @@ class BlockChainUtils(object):
         current_batch = 0
         processed_txn_ids = []
 
-        # Paginate through UTXO until the required amount is collected or there are no more UTXO
+        # Paginate through UTXOs until we collect enough or run out of UTXOs
         while total_collected < (amount_needed or float("inf")):
             utxos_batch = unspent_txns[current_batch * batch_size: (current_batch + 1) * batch_size]
 
@@ -315,22 +317,26 @@ class BlockChainUtils(object):
 
                 # Check if the UTXO has been spent in the blockchain
                 if await self.config.BU.is_input_spent(txn_id, public_key, inc_mempool=False):
-                    spent_txns.append(txn)
+                    spent_txns.append(txn)  # Add to spent_txns
                     processed_txn_ids.append(txn_id)
+
                 # Check if the UTXO is in the mempool
                 elif await self.config.BU.is_input_in_mempool(txn_id, public_key):
                     mempool_txns.append(txn)
                     processed_txn_ids.append(txn_id)
                     self.app_log.info(f"UTXO {txn_id} is in mempool. Moved to mempool.")
                 else:
+                    # UTXO is valid and available, add it to the selected_utxos
                     selected_utxos.append(txn)
                     total_collected += txn["outputs"][0]["value"]
                     self.app_log.info(f"Selected UTXO {txn_id} with value {txn['outputs'][0]['value']}")
 
+                    # If amount_needed = 0, return only 1 UTXO
                     if amount_needed == 0 and len(selected_utxos) >= max_utxo_to_return:
                         self.app_log.info(f"Limit of {max_utxo_to_return} UTXOs reached for amount_needed=0.")
                         break
 
+                    # Stop if we have collected enough UTXOs
                     if amount_needed and total_collected >= amount_needed:
                         self.app_log.info(f"Collected sufficient amount: {total_collected} >= {amount_needed}.")
                         break
@@ -345,27 +351,33 @@ class BlockChainUtils(object):
 
         unspent_txns = [txn for txn in unspent_txns if txn["id"] not in processed_txn_ids]
 
-        # Verify transactions in the mempool
         verified_mempool_txns = []
         for txn in mempool_txns:
             txn_id = txn["id"]
+
+            # If the transaction has been confirmed in the blockchain, move to spent
             if await self.config.BU.is_input_spent(txn_id, public_key, inc_mempool=False):
                 spent_txns.append(txn)
+                self.app_log.debug(f"UTXO {txn_id} has been confirmed in the blockchain.")
             else:
-                self.app_log.info(f"UTXO {txn_id} still in mempool.")
+                self.app_log.debug(f"UTXO {txn_id} still in mempool.")
                 verified_mempool_txns.append(txn)
 
         mempool_txns = verified_mempool_txns
 
-        # Update UTXO cache
-        self.app_log.info(f"Updating UTXO cache for address {address}. Unspent: {len(unspent_txns)}, Spent: {len(spent_txns)}, Mempool: {len(mempool_txns)}.")
+        self.app_log.info(f"Updating UTXO cache for address {address}. Unspent: {len(unspent_txns)}, Mempool: {len(mempool_txns)}.")
+        self.app_log.info(f"Spent transactions being updated: {len(spent_txns)}")
+
+        # Update the cache with the new unspent, mempool, and spent transactions
         await self.config.mongo.async_db.utxo_data.update_one(
             {"address": address},
             {
                 "$set": {
                     "unspent_txns": unspent_txns,
-                    "spent_txns": spent_txns,
-                    "mempool_txns": mempool_txns,
+                    "mempool_txns": mempool_txns
+                },
+                "$addToSet": {
+                    "spent_txns": {"$each": spent_txns}
                 }
             },
             upsert=True
@@ -666,7 +678,6 @@ class BlockChainUtils(object):
         )
 
     async def update_utxo_cache(self, address):
-
         public_key = await self.get_reverse_public_key(address)
 
         utxo_cache = await self.config.mongo.async_db.utxo_data.find_one({"address": address})
@@ -680,7 +691,6 @@ class BlockChainUtils(object):
         else:
             last_processed_block = utxo_cache.get("last_processed_block", 0)
             unspent_txns = utxo_cache.get("unspent_txns", [])
-            spent_txns = utxo_cache.get("spent_txns", [])
             mempool_txns = utxo_cache.get("mempool_txns", [])
             self.app_log.info(f"Cache retrieved for address {address}, processed up to block {last_processed_block}.")
 
@@ -733,7 +743,6 @@ class BlockChainUtils(object):
             {
                 "$set": {
                     "unspent_txns": unspent_txns,
-                    "spent_txns": spent_txns,
                     "mempool_txns": mempool_txns,
                     "last_processed_block": latest_processed_block,
                 }
@@ -741,7 +750,7 @@ class BlockChainUtils(object):
             upsert=True
         )
 
-        self.app_log.info(f"UTXO cache updated for address {address}. Unspent: {len(unspent_txns)}, Spent: {len(spent_txns)}, Mempool: {len(mempool_txns)}.")
+        self.app_log.info(f"UTXO cache updated for address {address}. Unspent: {len(unspent_txns)}, Mempool: {len(mempool_txns)}.")
 
     def get_version_for_height_DEPRECATED(self, height: int):
         # TODO: move to CHAIN
