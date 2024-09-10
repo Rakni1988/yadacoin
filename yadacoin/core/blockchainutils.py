@@ -98,6 +98,12 @@ class BlockChainUtils(object):
             unspent_txns_query, allowDiskUse=True, hint="__to"
         )
 
+    async def get_unspent_txns(self, unspent_txns_query):
+        # Return the cursor directly without awaiting it
+        return self.config.mongo.async_db.blocks.aggregate(
+            unspent_txns_query, allowDiskUse=True, hint="__to"
+        )
+
     async def get_coinbase_total_output_balance(self, address):
         reverse_public_key = await self.get_reverse_public_key(address)
         coinbase_pipeline = [
@@ -176,11 +182,23 @@ class BlockChainUtils(object):
                 "$group": {
                     "_id": None,
                     "spent_balance": {"$sum": "$transactions.outputs.value"},
+                    "total_fee": {"$sum": "$transactions.fee"}
                 }
             },
+            {
+                "$project": {
+                    "total_spent_balance": {
+                        "$add": ["$spent_balance", "$total_fee"]
+                    }
+                }
+            }
         ]
         result = await self.mongo.async_db.blocks.aggregate(pipeline).to_list(length=1)
-        return result[0]["spent_balance"] if result else 0.0
+        
+        if result:
+            return result[0]["total_spent_balance"]
+        
+        return 0.0
 
     async def get_final_balance(self, address):
         total_coinbase = await self.get_coinbase_total_output_balance(address)
@@ -261,6 +279,110 @@ class BlockChainUtils(object):
             unspent_txns_query=query, address=address
         )
 
+    async def get_wallet_unspent_transactions_for_spending_with_cache(self, address, amount_needed=None, inc_mempool=False, batch_size=100):
+
+        await self.update_utxo_cache(address)
+
+        utxo_cache = await self.config.mongo.async_db.utxo_data.find_one({"address": address})
+
+        if not utxo_cache:
+            self.app_log.warning(f"No cache found for address {address}.")
+            return []
+
+        unspent_txns = utxo_cache.get("unspent_txns", [])
+        spent_txns = utxo_cache.get("spent_txns", [])
+        mempool_txns = utxo_cache.get("mempool_txns", [])
+
+        public_key = await self.get_reverse_public_key(address)
+
+        # Set limit for amount_needed=0 to return only 1 UTXO
+        max_utxo_to_return = 1 if amount_needed == 0 else None
+
+        total_collected = 0
+        selected_utxos = []
+        current_batch = 0
+        processed_txn_ids = []
+
+        # Paginate through UTXO until the required amount is collected or there are no more UTXO
+        while total_collected < (amount_needed or float("inf")):
+            utxos_batch = unspent_txns[current_batch * batch_size: (current_batch + 1) * batch_size]
+
+            if not utxos_batch:
+                break
+
+            for txn in utxos_batch:
+                txn_id = txn["id"]
+
+                # Check if the UTXO has been spent in the blockchain
+                if await self.config.BU.is_input_spent(txn_id, public_key, inc_mempool=False):
+                    spent_txns.append(txn)
+                    processed_txn_ids.append(txn_id)
+                # Check if the UTXO is in the mempool
+                elif await self.config.BU.is_input_in_mempool(txn_id, public_key):
+                    mempool_txns.append(txn)
+                    processed_txn_ids.append(txn_id)
+                    self.app_log.info(f"UTXO {txn_id} is in mempool. Moved to mempool.")
+                else:
+                    selected_utxos.append(txn)
+                    total_collected += txn["outputs"][0]["value"]
+                    self.app_log.info(f"Selected UTXO {txn_id} with value {txn['outputs'][0]['value']}")
+
+                    if amount_needed == 0 and len(selected_utxos) >= max_utxo_to_return:
+                        self.app_log.info(f"Limit of {max_utxo_to_return} UTXOs reached for amount_needed=0.")
+                        break
+
+                    if amount_needed and total_collected >= amount_needed:
+                        self.app_log.info(f"Collected sufficient amount: {total_collected} >= {amount_needed}.")
+                        break
+
+            if amount_needed == 0 and len(selected_utxos) >= max_utxo_to_return:
+                break
+
+            if amount_needed and total_collected >= amount_needed:
+                break
+
+            current_batch += 1
+
+        unspent_txns = [txn for txn in unspent_txns if txn["id"] not in processed_txn_ids]
+
+        # Verify transactions in the mempool
+        verified_mempool_txns = []
+        for txn in mempool_txns:
+            txn_id = txn["id"]
+            if await self.config.BU.is_input_spent(txn_id, public_key, inc_mempool=False):
+                spent_txns.append(txn)
+            else:
+                self.app_log.info(f"UTXO {txn_id} still in mempool.")
+                verified_mempool_txns.append(txn)
+
+        mempool_txns = verified_mempool_txns
+
+        # Update UTXO cache
+        self.app_log.info(f"Updating UTXO cache for address {address}. Unspent: {len(unspent_txns)}, Spent: {len(spent_txns)}, Mempool: {len(mempool_txns)}.")
+        await self.config.mongo.async_db.utxo_data.update_one(
+            {"address": address},
+            {
+                "$set": {
+                    "unspent_txns": unspent_txns,
+                    "spent_txns": spent_txns,
+                    "mempool_txns": mempool_txns,
+                }
+            },
+            upsert=True
+        )
+
+        formatted_utxos = [
+            {
+                "time": txn["time"],
+                "id": txn["id"],
+                "outputs": txn["outputs"],
+            }
+            for txn in selected_utxos
+        ]
+
+        self.app_log.info(f"Returning {len(formatted_utxos)} UTXOs for address {address}.")
+        return formatted_utxos if selected_utxos else []
+
     def get_wallet_unspent_transactions_for_spending(
         self, address, amount_needed=None, inc_mempool=False
     ):
@@ -268,7 +390,7 @@ class BlockChainUtils(object):
             {
                 "$match": {
                     "transactions.outputs.to": address,
-                    "transactions.outputs.value": {"$gte": 1},
+                    "transactions.outputs.value": {"$gt": 0},
                 },
             },
             {"$unwind": "$transactions"},
@@ -276,11 +398,12 @@ class BlockChainUtils(object):
             {
                 "$match": {
                     "transactions.outputs.to": address,
-                    "transactions.outputs.value": {"$gte": 1},
+                    "transactions.outputs.value": {"$gt": 0},
                 },
             },
-            {"$sort": {"transactions.outputs.value": -1}},
+            {"$sort": {"transactions.time": 1}},
         ]
+        
         return self.get_wallet_unspent_transactions(
             unspent_txns_query=query,
             address=address,
@@ -497,8 +620,10 @@ class BlockChainUtils(object):
         from_index=None,
         extra_blocks=None,
     ):
+        
         if not isinstance(input_ids, list):
             input_ids = [input_ids]
+
         query = [
             {
                 "$match": {
@@ -514,33 +639,109 @@ class BlockChainUtils(object):
                 }
             },
         ]
-        if from_index:
-            self.config.app_log.debug(f"from_index {from_index}")
-            query.insert(0, {"$match": {"index": {"$lt": from_index}}})
+        
         async for x in self.mongo.async_db.blocks.aggregate(query, allowDiskUse=True):
-            if extra_blocks:
-                for block in extra_blocks:
-                    if block.index == x["index"]:
-                        for txn in block.transactions:
-                            for txn_input in txn.inputs:
-                                for input_id in input_ids:
-                                    self.config.app_log.debug(
-                                        f"{input_id} {txn_input.id}"
-                                    )
-                                    if input_id == txn_input.id:
-                                        return True
-                return False
+            self.app_log.debug(f"Input {input_ids} spent in block index {x['index']}. Moved to spent.")
             return True
 
         if inc_mempool:
             if await self.get_mempool_transactions(public_key, input_ids):
                 return True
+
+        return False
+
+    async def is_input_in_mempool(self, input_ids, public_key):
+        if not isinstance(input_ids, list):
+            input_ids = [input_ids]
+
+        mempool_txn = await self.get_mempool_transactions(public_key, input_ids)
+        if mempool_txn:
+            return True
+
         return False
 
     async def get_mempool_transactions(self, public_key, input_ids):
         return await self.mongo.async_db.miner_transactions.find_one(
             {"inputs.id": {"$in": input_ids}, "public_key": public_key}
         )
+
+    async def update_utxo_cache(self, address):
+
+        public_key = await self.get_reverse_public_key(address)
+
+        utxo_cache = await self.config.mongo.async_db.utxo_data.find_one({"address": address})
+
+        if not utxo_cache:
+            last_processed_block = 0
+            unspent_txns = []
+            spent_txns = []
+            mempool_txns = []
+            self.app_log.info(f"No cache found for address {address}. Creating a new one.")
+        else:
+            last_processed_block = utxo_cache.get("last_processed_block", 0)
+            unspent_txns = utxo_cache.get("unspent_txns", [])
+            spent_txns = utxo_cache.get("spent_txns", [])
+            mempool_txns = utxo_cache.get("mempool_txns", [])
+            self.app_log.info(f"Cache retrieved for address {address}, processed up to block {last_processed_block}.")
+
+        latest_processed_block = last_processed_block
+
+        # Query blocks from the last processed block
+        query = [
+            {
+                "$match": {
+                    "index": {"$gt": last_processed_block},
+                    "transactions.outputs.to": address,
+                    "transactions.outputs.value": {"$gt": 0},
+                },
+            },
+            {"$unwind": "$transactions"},
+            {"$unwind": "$transactions.outputs"},
+            {
+                "$match": {
+                    "transactions.outputs.to": address,
+                    "transactions.outputs.value": {"$gt": 0},
+                }
+            },
+            {"$sort": {"index": 1}},
+        ]
+
+        async for txn in self.config.mongo.async_db.blocks.aggregate(query, allowDiskUse=True):
+            txn_id = txn["transactions"]["id"]
+
+            simplified_txn = {
+                "time": txn["transactions"]["time"],
+                "id": txn_id,
+                "outputs": [
+                    {
+                        "to": txn["transactions"]["outputs"]["to"],
+                        "value": txn["transactions"]["outputs"]["value"]
+                    }
+                ],
+                "index": txn["index"],
+            }
+
+            unspent_txns.append(simplified_txn)
+            latest_processed_block = txn["index"]
+            self.app_log.debug(f"New UTXO {txn_id} from block {txn['index']}")
+
+        if latest_processed_block == last_processed_block:
+            self.app_log.info(f"No new blocks to process for address {address}.")
+
+        await self.config.mongo.async_db.utxo_data.update_one(
+            {"address": address},
+            {
+                "$set": {
+                    "unspent_txns": unspent_txns,
+                    "spent_txns": spent_txns,
+                    "mempool_txns": mempool_txns,
+                    "last_processed_block": latest_processed_block,
+                }
+            },
+            upsert=True
+        )
+
+        self.app_log.info(f"UTXO cache updated for address {address}. Unspent: {len(unspent_txns)}, Spent: {len(spent_txns)}, Mempool: {len(mempool_txns)}.")
 
     def get_version_for_height_DEPRECATED(self, height: int):
         # TODO: move to CHAIN
