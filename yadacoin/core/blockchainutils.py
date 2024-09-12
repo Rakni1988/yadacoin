@@ -732,8 +732,10 @@ class BlockChainUtils(object):
         async for txn in self.config.mongo.async_db.blocks.aggregate(query, allowDiskUse=True):
             txn_id = txn["transactions"]["id"]
 
+            txn_time = txn["transactions"].get("time", "")
+
             simplified_txn = {
-                "time": txn["transactions"]["time"],
+                "time": txn_time,
                 "id": txn_id,
                 "outputs": [
                     {
