@@ -316,8 +316,11 @@ class BlockChainUtils(object):
                 txn_id = txn["id"]
 
                 # Check if the UTXO has been spent in the blockchain
-                if await self.config.BU.is_input_spent(txn_id, public_key, inc_mempool=False):
-                    spent_txns.append(txn)  # Add to spent_txns
+                is_spent = await self.config.BU.is_input_spent(txn_id, public_key, inc_mempool=False)
+                if is_spent:
+                    # Log the UTXO as spent
+                    self.app_log.info(f"UTXO {txn_id} is spent in blockchain.")
+                    spent_txns.append(txn)
                     processed_txn_ids.append(txn_id)
 
                 # Check if the UTXO is in the mempool
@@ -632,10 +635,8 @@ class BlockChainUtils(object):
         from_index=None,
         extra_blocks=None,
     ):
-        
         if not isinstance(input_ids, list):
             input_ids = [input_ids]
-
         query = [
             {
                 "$match": {
@@ -651,15 +652,27 @@ class BlockChainUtils(object):
                 }
             },
         ]
-        
+        if from_index:
+            self.config.app_log.debug(f"from_index {from_index}")
+            query.insert(0, {"$match": {"index": {"$lt": from_index}}})
         async for x in self.mongo.async_db.blocks.aggregate(query, allowDiskUse=True):
-            self.app_log.debug(f"Input {input_ids} spent in block index {x['index']}. Moved to spent.")
+            if extra_blocks:
+                for block in extra_blocks:
+                    if block.index == x["index"]:
+                        for txn in block.transactions:
+                            for txn_input in txn.inputs:
+                                for input_id in input_ids:
+                                    self.config.app_log.debug(
+                                        f"{input_id} {txn_input.id}"
+                                    )
+                                    if input_id == txn_input.id:
+                                        return True
+                return False
             return True
 
         if inc_mempool:
             if await self.get_mempool_transactions(public_key, input_ids):
                 return True
-
         return False
 
     async def is_input_in_mempool(self, input_ids, public_key):
