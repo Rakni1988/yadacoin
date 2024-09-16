@@ -225,7 +225,25 @@ class GetMempoolTransactionsHandler(BaseHandler):
     async def get(self):
         try:
             transactions = await self.config.mongo.async_db.miner_transactions.find({}).to_list(length=None)
-            self.render_as_json({"transactions": transactions})
+
+            valid_transactions = []
+
+            transaction_objs = []
+            used_sigs = []
+            used_inputs = {}
+            index = LatestBlock.block.index
+            xtime = int(time.time())
+
+            for transaction in transactions:
+                transaction_obj = Transaction.ensure_instance(transaction)
+                valid_transactions.append(transaction_obj)
+
+            await Block.validate_transactions(
+                valid_transactions, transaction_objs, used_sigs, used_inputs, index, xtime
+            )
+
+            self.render_as_json({"transactions": [tx.to_dict() for tx in transaction_objs]})
+
         except Exception as e:
             self.render_as_json({"error": str(e)}, status=500)
 
