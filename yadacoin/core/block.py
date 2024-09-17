@@ -24,6 +24,7 @@ from yadacoin.core.nodes import Nodes
 from yadacoin.core.transaction import (
     InvalidTransactionException,
     Output,
+    TotalValueMismatchException,
     Transaction,
     TransactionAddressInvalidException,
 )
@@ -252,7 +253,6 @@ class Block(object):
             [float(transaction_obj.fee) for transaction_obj in transaction_objs]
         )
         block_reward = CHAIN.get_block_reward(index)
-
         if index >= CHAIN.PAY_MASTER_NODES_FORK:
             nodes = Nodes.get_all_nodes_for_block_height(config.LatestBlock.block.index)
             outputs = [
@@ -269,9 +269,20 @@ class Block(object):
 
             successful_nodes = await test_all_nodes(nodes)
             if successful_nodes:
-                masternode_reward_divided = masternode_reward_total / len(
-                    successful_nodes
-                )
+                if index >= CHAIN.CHECK_MASTERNODE_FEE_FORK:
+                    masternode_fee_sum = sum(
+                        [
+                            float(transaction_obj.masternode_fee)
+                            for transaction_obj in transaction_objs
+                        ]
+                    )
+                    masternode_reward_divided = (
+                        masternode_reward_total + masternode_fee_sum
+                    ) / len(successful_nodes)
+                else:
+                    masternode_reward_divided = masternode_reward_total / len(
+                        successful_nodes
+                    )
                 for successful_node in successful_nodes:
                     outputs.append(
                         Output.from_dict(
@@ -341,7 +352,15 @@ class Block(object):
                 check_max_inputs = False
                 if index > CHAIN.CHECK_MAX_INPUTS_FORK:
                     check_max_inputs = True
-                await transaction_obj.verify(check_max_inputs=check_max_inputs)
+
+                check_masternode_fee = False
+                if index >= CHAIN.CHECK_MASTERNODE_FEE_FORK:
+                    check_masternode_fee = True
+
+                await transaction_obj.verify(
+                    check_max_inputs=check_max_inputs,
+                    check_masternode_fee=check_masternode_fee,
+                )
                 for output in transaction_obj.outputs:
                     if not config.address_is_valid(output.to):
                         raise TransactionAddressInvalidException(
@@ -522,7 +541,6 @@ class Block(object):
 
         header = self.generate_header()
         hashtest = self.generate_hash_from_header(self.index, header, str(self.nonce))
-        # print("header", header, "nonce", self.nonce, "hashtest", hashtest)
         if self.hash != hashtest:
             getLogger("tornado.application").warning(
                 "Verify error hashtest {} header {} nonce {}".format(
@@ -533,7 +551,6 @@ class Block(object):
 
         address = str(P2PKHBitcoinAddress.from_pubkey(bytes.fromhex(self.public_key)))
         try:
-            # print("address", address, "sig", self.signature, "pubkey", self.public_key)
             result = verify_signature(
                 base64.b64decode(self.signature),
                 self.hash.encode("utf-8"),
@@ -561,6 +578,7 @@ class Block(object):
         # verify reward
         coinbase_sum = 0
         fee_sum = 0.0
+        masternode_fee_sum = 0.0
         masternode_sums = {}
         for txn in self.transactions:
             if int(self.index) >= CHAIN.TXN_V3_FORK and int(txn.version) < 3:
@@ -614,8 +632,12 @@ class Block(object):
                         ],
                     )
                 fee_sum += float(txn.fee)
+                if self.index >= CHAIN.CHECK_MASTERNODE_FEE_FORK:
+                    masternode_fee_sum += float(txn.masternode_fee)
             else:
                 fee_sum += float(txn.fee)
+                if self.index >= CHAIN.CHECK_MASTERNODE_FEE_FORK:
+                    masternode_fee_sum += float(txn.masternode_fee)
 
         reward = CHAIN.get_block_reward(self.index)
 
@@ -626,13 +648,23 @@ class Block(object):
         Integrate block error 1 ('Coinbase output total does not equal block reward + transaction fees', 0.020999999999999998, 0.021000000000000796)
         """
 
-        if self.index >= CHAIN.PAY_MASTER_NODES_FORK:
+        if self.index >= CHAIN.CHECK_MASTERNODE_FEE_FORK:
+            masternode_sum = sum(x for x in masternode_sums.values())
+            if quantize_eight(fee_sum + masternode_fee_sum) != quantize_eight(
+                (coinbase_sum + masternode_sum) - reward
+            ):
+                raise TotalValueMismatchException(
+                    "Masternode output totals do not equal block reward + masternode transaction fees",
+                    float(quantize_eight(fee_sum + masternode_fee_sum)),
+                    float(quantize_eight((coinbase_sum + masternode_sum) - reward)),
+                )
+
+        elif self.index >= CHAIN.PAY_MASTER_NODES_FORK:
             masternode_sum = sum(x for x in masternode_sums.values())
             if quantize_eight(fee_sum) != quantize_eight(
                 (coinbase_sum + masternode_sum) - reward
             ):
-                print(fee_sum, coinbase_sum, reward)
-                raise Exception(
+                raise TotalValueMismatchException(
                     "Coinbase output total does not equal block reward + transaction fees",
                     fee_sum,
                     (coinbase_sum - reward),
@@ -640,8 +672,7 @@ class Block(object):
 
         else:
             if quantize_eight(fee_sum) != quantize_eight(coinbase_sum - reward):
-                print(fee_sum, coinbase_sum, reward)
-                raise Exception(
+                raise TotalValueMismatchException(
                     "Coinbase output total does not equal block reward + transaction fees",
                     fee_sum,
                     (coinbase_sum - reward),

@@ -273,7 +273,25 @@ class BlockChainUtils(object):
                     "transactions.outputs.value": {"$gt": 0},
                 },
             },
-            {"$sort": {"transactions.outputs.time": 1}},
+            {
+                "$group": {
+                    "_id": {
+                        "transactionId": "$transactions.id",
+                        "to": "$transactions.outputs.to",
+                    },
+                    "totalValue": {"$sum": "$transactions.outputs.value"},
+                    "time": {"$first": "$transactions.time"},
+                }
+            },
+            {
+                "$group": {
+                    "_id": "$_id.transactionId",
+                    "id": {"$first": "$_id.transactionId"},
+                    "outputs": {"$push": {"to": "$_id.to", "value": "$totalValue"}},
+                    "time": {"$first": "$time"},
+                }
+            },
+            {"$sort": {"outputs.time": 1}},
         ]
         return self.get_wallet_unspent_transactions(
             unspent_txns_query=query, address=address
@@ -420,9 +438,24 @@ class BlockChainUtils(object):
                     "transactions.outputs.value": {"$gt": 0},
                 },
             },
+            {
+                "$group": {
+                    "_id": {
+                        "transactionId": "$transactions.id",
+                        "to": "$transactions.outputs.to",
+                    },
+                    "totalValue": {"$sum": "$transactions.outputs.value"},
+                }
+            },
+            {
+                "$group": {
+                    "_id": "$_id.transactionId",
+                    "id": {"$first": "$_id.transactionId"},
+                    "outputs": {"$push": {"to": "$_id.to", "value": "$totalValue"}},
+                }
+            },
             {"$sort": {"transactions.time": 1}},
         ]
-        
         return self.get_wallet_unspent_transactions(
             unspent_txns_query=query,
             address=address,
@@ -444,13 +477,46 @@ class BlockChainUtils(object):
         total = 0
         async for utxo in utxos:
             if not await self.config.BU.is_input_spent(
-                utxo["transactions"]["id"], public_key, inc_mempool=inc_mempool
+                utxo["id"], public_key, inc_mempool=inc_mempool
             ):
-                total += utxo["transactions"]["outputs"]["value"]
-                utxo["transactions"]["outputs"] = [utxo["transactions"]["outputs"]]
-                yield utxo["transactions"]
+                total += sum(
+                    [x["value"] for x in utxo["outputs"] if x["to"] == address]
+                )
+                yield utxo
                 if amount_needed is not None and total >= amount_needed:
                     break
+
+    async def get_wallet_masternode_fees_paid_transactions(
+        self, public_key, from_block
+    ):
+        query = [
+            {
+                "$match": {
+                    "index": {"$gte": from_block},
+                    "transactions.public_key": public_key,
+                },
+            },
+            {"$unwind": "$transactions"},
+            {
+                "$match": {
+                    "transactions.public_key": public_key,
+                    "transactions.masternode_fee": {"$gt": 0},
+                },
+            },
+        ]
+        # Return the cursor directly without awaiting it
+
+        txns = self.config.mongo.async_db.blocks.aggregate(query)
+        async for txn in txns:
+            yield txn
+
+    async def get_masternode_fees_paid_sum(self, public_key, from_block):
+        sum = 0
+        async for txn in self.get_wallet_masternode_fees_paid_transactions(
+            public_key, from_block
+        ):
+            sum += txn["transactions"]["masternode_fee"]
+        return sum
 
     async def get_transactions(
         self, wif, query, queryType, raw=False, both=True, skip=None

@@ -389,6 +389,7 @@ class Transaction(object):
             relationship_hash=txn.get("relationship_hash", ""),
             private=txn.get("private", False),
             never_expire=txn.get("never_expire", False),
+            masternode_fee=float(txn.get("masternode_fee", 0)),
         )
 
     def in_the_future(self):
@@ -454,20 +455,7 @@ class Transaction(object):
         )
         config.app_log.warning("Exception {}".format(e))
 
-    async def verify(self, check_input_spent=False, check_max_inputs=False):
-        from yadacoin.contracts.base import Contract
-
-        if check_max_inputs and len(self.inputs) > CHAIN.MAX_INPUTS:
-            raise TooManyInputsException(
-                f"Maximum inputs of {CHAIN.MAX_INPUTS} exceeded."
-            )
-
-        verify_hash = await self.generate_hash()
-        address = str(P2PKHBitcoinAddress.from_pubkey(bytes.fromhex(self.public_key)))
-
-        if verify_hash != self.hash:
-            raise InvalidTransactionException("transaction is invalid")
-
+    def verify_signature(self, address):
         try:
             result = verify_signature(
                 base64.b64decode(self.transaction_signature),
@@ -475,7 +463,6 @@ class Transaction(object):
                 bytes.fromhex(self.public_key),
             )
             if not result:
-                print("t verify1")
                 raise Exception()
         except:
             try:
@@ -489,7 +476,6 @@ class Transaction(object):
                     sigdecode=sigdecode_der,
                 )
                 if not result:
-                    print("t verify2")
                     raise Exception()
             except:
                 try:
@@ -499,13 +485,32 @@ class Transaction(object):
                         self.transaction_signature,
                     )
                     if not result:
-                        print("t verify3")
                         raise
                 except:
-                    print("t verify3")
                     raise InvalidTransactionSignatureException(
                         "transaction signature did not verify"
                     )
+
+    async def verify(
+        self,
+        check_input_spent=False,
+        check_max_inputs=False,
+        check_masternode_fee=False,
+    ):
+        from yadacoin.contracts.base import Contract
+
+        if check_max_inputs and len(self.inputs) > CHAIN.MAX_INPUTS:
+            raise TooManyInputsException(
+                f"Maximum inputs of {CHAIN.MAX_INPUTS} exceeded."
+            )
+
+        verify_hash = await self.generate_hash()
+        address = str(P2PKHBitcoinAddress.from_pubkey(bytes.fromhex(self.public_key)))
+
+        if verify_hash != self.hash:
+            raise InvalidTransactionException("transaction is invalid")
+
+        self.verify_signature(address)
 
         relationship = self.relationship
         if isinstance(self.relationship, Contract):
@@ -515,7 +520,6 @@ class Transaction(object):
             raise MaxRelationshipSizeExceeded(
                 f"Relationship field cannot be greater than {TransactionConsts.RELATIONSHIP_MAX_SIZE.value} bytes"
             )
-
         # verify spend
         total_input = 0
         exclude_recovered_ids = []
@@ -564,7 +568,6 @@ class Transaction(object):
                                 bytes.fromhex(txn_input.public_key),
                             )
                             if not result:
-                                print("t verify4")
                                 raise Exception()
                         except:
                             try:
@@ -574,7 +577,6 @@ class Transaction(object):
                                     txn.signature,
                                 )
                                 if not result:
-                                    print("t verify5")
                                     raise
                             except:
                                 raise InvalidTransactionSignatureException(
@@ -603,13 +605,31 @@ class Transaction(object):
         total_output = 0
         for txn in self.outputs:
             total_output += float(txn.value)
-
-        total = float(total_output) + float(self.fee)
-        if not equal(total_input, total):
-            raise TotalValueMismatchException(
-                "inputs and outputs sum must match %s, %s, %s, %s"
-                % (total_input, float(total_output), float(self.fee), total)
-            )
+        if check_masternode_fee:
+            total = float(total_output) + float(self.fee) + float(self.masternode_fee)
+            if not equal(total_input, total):
+                raise TotalValueMismatchException(
+                    "inputs and outputs sum must match %s, %s, %s, %s, %s"
+                    % (
+                        total_input,
+                        float(total_output),
+                        float(self.fee),
+                        float(self.masternode_fee),
+                        total,
+                    )
+                )
+        else:
+            total = float(total_output) + float(self.fee)
+            if not equal(total_input, total):
+                raise TotalValueMismatchException(
+                    "inputs and outputs sum must match %s, %s, %s, %s"
+                    % (
+                        total_input,
+                        float(total_output),
+                        float(self.fee),
+                        total,
+                    )
+                )
 
     async def generate_hash(self):
         from yadacoin.contracts.base import Contract

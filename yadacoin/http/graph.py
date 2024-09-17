@@ -203,25 +203,36 @@ class GraphTransactionHandler(BaseGraphHandler):
         for txn in items:
             transaction = Transaction.from_dict(txn)
             try:
-                await transaction.verify()
+                await transaction.verify(
+                    check_input_spent=True,
+                    check_masternode_fee=True,
+                    check_max_inputs=True,
+                )
             except InvalidTransactionException:
                 await self.config.mongo.async_db.failed_transactions.insert_one(
                     {"exception": "InvalidTransactionException", "txn": txn}
                 )
                 print("InvalidTransactionException")
-                return "InvalidTransactionException", 400
+                self.set_status(400)
+                return self.render_as_json(
+                    {"status": False, "message": "InvalidTransactionException"}
+                )
             except InvalidTransactionSignatureException:
                 print("InvalidTransactionSignatureException")
                 await self.config.mongo.async_db.failed_transactions.insert_one(
                     {"exception": "InvalidTransactionSignatureException", "txn": txn}
                 )
-                return "InvalidTransactionSignatureException", 400
+                self.set_status(400)
+                return self.render_as_json(
+                    {"status": False, "message": "InvalidTransactionSignatureException"}
+                )
             except MissingInputTransactionException:
                 pass
             except:
                 raise
                 print("uknown error")
-                return "uknown error", 400
+                self.set_status(400)
+                return self.render_as_json({"status": False, "message": "uknown error"})
             transactions.append(transaction)
 
         for x in transactions:
