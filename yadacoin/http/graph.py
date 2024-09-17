@@ -146,12 +146,10 @@ class GraphRIDWalletHandler(BaseGraphHandler):
 
         balance = await self.config.BU.get_wallet_balance(address)
 
-        unspent_txns = [
-            x
-            async for x in self.config.BU.get_wallet_unspent_transactions_for_spending(
-                address, inc_mempool=True, amount_needed=amount_needed
-            )
-        ]
+        # Pobieramy listę UTXO
+        unspent_txns = await self.config.BU.get_wallet_unspent_transactions_for_spending_with_cache(
+            address, inc_mempool=True, amount_needed=amount_needed
+        )
 
         wallet = {
             "pending_balance": "{0:.8f}".format(pending_balance),
