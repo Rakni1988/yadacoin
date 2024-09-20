@@ -647,26 +647,22 @@ class Transaction(object):
                     raise InvalidRelationshipHashException()
             else:
                 relationship_hash = self.relationship_hash
-            hashout = (
-                hashlib.sha256(
-                    (
-                        self.public_key
-                        + str(self.time)
-                        + self.dh_public_key
-                        + self.rid
-                        + relationship_hash
-                        + "{0:.8f}".format(self.fee)
-                        + "{0:.8f}".format(self.masternode_fee)
-                        + self.requester_rid
-                        + self.requested_rid
-                        + inputs_concat
-                        + outputs_concat
-                        + str(self.version)
-                    ).encode("utf-8")
-                )
-                .digest()
-                .hex()
+            string_to_hash = (
+                self.public_key
+                + str(self.time)
+                + self.dh_public_key
+                + self.rid
+                + relationship_hash
+                + "{0:.8f}".format(self.fee)
+                + "{0:.8f}".format(self.masternode_fee)
+                + self.requester_rid
+                + self.requested_rid
+                + inputs_concat
+                + outputs_concat
+                + str(self.version)
             )
+            
+            hashout = hashlib.sha256(string_to_hash.encode("utf-8")).digest().hex()
         elif self.version == 4:
             if relationship:
                 relationship_hash = hashlib.sha256(relationship.encode()).digest().hex()
@@ -749,6 +745,7 @@ class Transaction(object):
                 .digest()
                 .hex()
             )
+
         return hashout
 
     async def get_input_hashes(self):
@@ -769,7 +766,10 @@ class Transaction(object):
         outputs_sorted = sorted(
             [x.to_dict() for x in self.outputs], key=lambda x: x["to"].lower()
         )
-        return "".join([x["to"] + "{0:.8f}".format(x["value"]) for x in outputs_sorted])
+
+        output_hashes = "".join([x["to"] + "{0:.8f}".format(x["value"]) for x in outputs_sorted])
+
+        return output_hashes
 
     async def get_coinbase_origin(self, txn_input):
         from yadacoin.core.block import Block

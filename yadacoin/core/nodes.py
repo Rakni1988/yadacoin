@@ -4,13 +4,21 @@ from bitcoin.wallet import P2PKHBitcoinAddress
 
 from yadacoin.core.peer import Seed, SeedGateway, ServiceProvider
 
+from logging import getLogger
+
 
 class Nodes:
+    _app_log = getLogger("tornado.application")
+
+    def __init__(self):
+        pass
+
     @classmethod
     def set_fork_points(cls):
         cls().fork_points = []
         for NODE in cls()._NODES:
             for rng in NODE["ranges"]:
+                #cls()._app_log.info("Added fork point: {}".format(rng[0]))
                 cls().fork_points.append(rng[0])
         cls().fork_points = sorted(list(set(cls().fork_points)))
 
@@ -20,7 +28,7 @@ class Nodes:
         for fork_point in cls().fork_points:
             for NODE in cls()._NODES:
                 for rng in NODE["ranges"]:
-                    if rng[1] and rng[1] <= fork_point:
+                    if rng[1] is not None and rng[1] <= fork_point:
                         continue
                     if rng[0] <= fork_point:
                         cls().NODES[fork_point].append(NODE["node"])
@@ -30,8 +38,10 @@ class Nodes:
         prev = 0
         for x in cls().fork_points:
             if height < x:
+                #cls()._app_log.info("Using fork point {}".format(prev))
                 return prev
             prev = x
+        #cls()._app_log.info("Using fork point {}".format(prev))
         return prev
 
     _get_nodes_for_block_height_cache = {
@@ -42,9 +52,9 @@ class Nodes:
 
     @classmethod
     def get_nodes_for_block_height(cls, height):
-        fork_point = cls().get_fork_for_block_height(height)
+        fork_point = cls().get_fork_for_block_height(height + 1)
         if fork_point is None:
-            fork_point = cls().get_fork_for_block_height(height)
+            fork_point = cls().get_fork_for_block_height(height + 1)
         if fork_point not in cls()._get_nodes_for_block_height_cache[cls.__name__]:
             cls()._get_nodes_for_block_height_cache[cls.__name__][
                 fork_point
@@ -54,14 +64,14 @@ class Nodes:
     @classmethod
     def get_all_nodes_for_block_height(cls, height):
         return (
-            Seeds.get_nodes_for_block_height(height)
-            + SeedGateways.get_nodes_for_block_height(height)
-            + ServiceProviders.get_nodes_for_block_height(height),
+            Seeds.get_nodes_for_block_height(height + 1)
+            + SeedGateways.get_nodes_for_block_height(height + 1)
+            + ServiceProviders.get_nodes_for_block_height(height + 1),
         )[0]
 
     @classmethod
     def get_all_nodes_indexed_by_address_for_block_height(cls, height):
-        nodes = cls().get_all_nodes_for_block_height(height)
+        nodes = cls().get_all_nodes_for_block_height(height + 1)
         return {
             str(
                 P2PKHBitcoinAddress.from_pubkey(bytes.fromhex(node.identity.public_key))
@@ -84,7 +94,7 @@ class Seeds(Nodes):
         self.initialized = True
         self._NODES = [
             {
-                "ranges": [(0, None)],
+                "ranges": [(0, 482760)],
                 "node": Seed.from_dict(
                     {
                         "host": "yadacoin.io",
@@ -99,7 +109,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(0, None)],
+                "ranges": [(0, 482760)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.hashyada.com",
@@ -114,7 +124,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(0, None)],
+                "ranges": [(0, 482760)],
                 "node": Seed.from_dict(
                     {
                         "host": "seedau.hashyada.com",
@@ -129,7 +139,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(443600, None)],
+                "ranges": [(443600, 482760)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.crbrain.online",
@@ -144,7 +154,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(443700, None)],
+                "ranges": [(443700, 482760)],
                 "node": Seed.from_dict(
                     {
                         "host": "yada-alpha.mynodes.live",
@@ -159,7 +169,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(446400, None)],
+                "ranges": [(446400, 482760)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.yada.toksyk.pl",
@@ -174,7 +184,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(449000, None)],
+                "ranges": [(449000, 482760)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.darksidetx.net",
@@ -189,7 +199,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(449000, None)],
+                "ranges": [(449000, 482760)],
                 "node": Seed.from_dict(
                     {
                         "host": "seedno.hashyada.com",
@@ -204,7 +214,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(452000, None)],
+                "ranges": [(452000, 482760)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.friendspool.club",
@@ -219,7 +229,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(467200, None)],
+                "ranges": [(467200, 482760)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.berkinyada.xyz",
@@ -249,7 +259,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(472000, None)],  # UPDATED IDENTITY INFORMATION
+                "ranges": [(472000, 482760)],  # UPDATED IDENTITY INFORMATION
                 "node": Seed.from_dict(
                     {
                         "host": "seed.funckyman.xyz",
@@ -264,7 +274,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(477000, None)],
+                "ranges": [(477000, 482760)],
                 "node": Seed.from_dict(
                     {
                         "host": "yadaseed1.hashrank.top",
@@ -279,7 +289,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(479700, None)],
+                "ranges": [(479700, 482760)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.supahash.com",
@@ -294,7 +304,7 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(480100, None)],
+                "ranges": [(480100, 482760)],
                 "node": Seed.from_dict(
                     {
                         "host": "seed.nephotim.co",
@@ -309,17 +319,17 @@ class Seeds(Nodes):
                 ),
             },
             {
-                "ranges": [(505600, None)],
+                "ranges": [(482760, None)],
                 "node": Seed.from_dict(
                     {
-                        "host": "seed.rogue-miner.com",
+                        "host": "seed.yadaminers.pl",
                         "port": 8000,
                         "identity": {
                             "username": "",
-                            "username_signature": "MEUCIQD0MsT34TkNpYL5kOhLA/4E4YY+SzFhHtIPWPzHCShVGwIgYlzAQeujWvesmU6ZWrTMRwtLFFtjePZjLJDJjTMEQlc=",
-                            "public_key": "03c815e3160b72c0fdd98f5b9fcca5a5ead09163272bc01e4be6397d1d3dbda9b3",
+                            "username_signature": "MEQCICpNCiUo/a2yNAU8Jf1fYFzX+13aUsV+zAi3UuY/rD9EAiAbykyNZo52cwoIMfAKQYjSB9s48P1gIOVgp4kyyq6VAA==",
+                            "public_key": "0297c4068498342a37759f0198fa6a816bbb2b91a9c64142da41fcb3b9cb65844c",
                         },
-                        "seed_gateway": "MEUCIQC/PWvXpjny1yDGDPRtBzl6g7Lb9lcUuI0v0Kf6wxYi4AIgeRb5PtNhO2Eks6iiPEBuebKuXSeTM9euU9sWqOZYUec=",
+                        "seed_gateway": "MEUCIQDzawJsltO8W23JyxJ2jRvp5dkw3EV4+goD7i58eX23UwIgaTCE4G6D4FlwPzjxozc2nS9TMoUnj5DZw68Vwu6Lnyo=",
                     }
                 ),
             },
@@ -343,7 +353,7 @@ class SeedGateways(Nodes):
         self.initialized = True
         self._NODES = [
             {
-                "ranges": [(0, None)],
+                "ranges": [(0, 482760)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "remotelyrich.com",
@@ -358,7 +368,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(0, None)],
+                "ranges": [(0, 482760)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgateway.hashyada.com",
@@ -373,7 +383,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(0, None)],
+                "ranges": [(0, 482760)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgatewayau.hashyada.com",
@@ -388,7 +398,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(443600, None)],
+                "ranges": [(443600, 482760)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgateway.crbrain.online",
@@ -403,7 +413,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(443700, None)],
+                "ranges": [(443700, 482760)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "yada-bravo.mynodes.live",
@@ -418,7 +428,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(446400, None)],
+                "ranges": [(446400, 482760)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgateway.yada.toksyk.pl",
@@ -433,7 +443,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(449000, None)],
+                "ranges": [(449000, 482760)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgateway.darksidetx.net",
@@ -448,7 +458,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(449000, None)],
+                "ranges": [(449000, 482760)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgatewayno.hashyada.com",
@@ -463,7 +473,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(452000, None)],
+                "ranges": [(452000, 482760)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgateway.friendspool.club",
@@ -478,7 +488,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(467200, None)],
+                "ranges": [(467200, 482760)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgat.berkinyada.xyz",
@@ -508,7 +518,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(472000, None)],  # UPDATED IDENTITY INFORMATION
+                "ranges": [(472000, 482760)],  # UPDATED IDENTITY INFORMATION
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgateway.funckyman.xyz",
@@ -523,7 +533,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(477000, None)],
+                "ranges": [(477000, 482760)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "yadaseed2.hashrank.top",
@@ -538,7 +548,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(479700, None)],
+                "ranges": [(479700, 482760)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "seedgateway.supahash.com",
@@ -553,7 +563,7 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(480100, None)],
+                "ranges": [(480100, 482760)],
                 "node": SeedGateway.from_dict(
                     {
                         "host": "gateway.nephotim.co",
@@ -568,17 +578,17 @@ class SeedGateways(Nodes):
                 ),
             },
             {
-                "ranges": [(505600, None)],
+                "ranges": [(482760, None)],
                 "node": SeedGateway.from_dict(
                     {
-                        "host": "seedgateway.rogue-miner.com",
-                        "port": 8002,
+                        "host": "sg.yadaminers.pl",
+                        "port": 8000,
                         "identity": {
                             "username": "",
-                            "username_signature": "MEUCIQC/PWvXpjny1yDGDPRtBzl6g7Lb9lcUuI0v0Kf6wxYi4AIgeRb5PtNhO2Eks6iiPEBuebKuXSeTM9euU9sWqOZYUec=",
-                            "public_key": "020ce4988acc611e651d539cc2064ec12e04f22b0f95f54cbdfb223174c0d6ee7f",
+                            "username_signature": "MEUCIQDzawJsltO8W23JyxJ2jRvp5dkw3EV4+goD7i58eX23UwIgaTCE4G6D4FlwPzjxozc2nS9TMoUnj5DZw68Vwu6Lnyo=",
+                            "public_key": "03a934d238c569bb5b9b10dc2cdb791553e34fc28ff94b3f5cda1f0878ab406c67",
                         },
-                        "seed": "MEUCIQD0MsT34TkNpYL5kOhLA/4E4YY+SzFhHtIPWPzHCShVGwIgYlzAQeujWvesmU6ZWrTMRwtLFFtjePZjLJDJjTMEQlc=",
+                        "seed": "MEQCICpNCiUo/a2yNAU8Jf1fYFzX+13aUsV+zAi3UuY/rD9EAiAbykyNZo52cwoIMfAKQYjSB9s48P1gIOVgp4kyyq6VAA==",
                     }
                 ),
             },
@@ -602,7 +612,7 @@ class ServiceProviders(Nodes):
         self.initialized = True
         self._NODES = [
             {
-                "ranges": [(0, None)],
+                "ranges": [(0, 482760)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "centeridentity.com",
@@ -618,7 +628,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(0, None)],
+                "ranges": [(0, 482760)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.hashyada.com",
@@ -634,7 +644,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(0, None)],
+                "ranges": [(0, 482760)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceproviderau.hashyada.com",
@@ -650,7 +660,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(443600, None)],
+                "ranges": [(443600, 482760)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.crbrain.online",
@@ -666,7 +676,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(443700, None)],
+                "ranges": [(443700, 482760)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "yada-charlie.mynodes.live",
@@ -682,7 +692,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(446400, None)],
+                "ranges": [(446400, 482760)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.yada.toksyk.pl",
@@ -698,7 +708,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(449000, None)],
+                "ranges": [(449000, 482760)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.darksidetx.net",
@@ -714,7 +724,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(449000, None)],
+                "ranges": [(449000, 482760)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceproviderno.hashyada.com",
@@ -730,7 +740,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(452000, None)],
+                "ranges": [(452000, 482760)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.friendspool.club",
@@ -746,7 +756,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(467200, None)],
+                "ranges": [(467200, 482760)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "servic.berkinyada.xyz",
@@ -778,7 +788,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(472000, None)],  # UPDATED IDENTITY INFORMATION
+                "ranges": [(472000, 482760)],  # UPDATED IDENTITY INFORMATION
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.funckyman.xyz",
@@ -794,7 +804,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(477000, None)],
+                "ranges": [(477000, 482760)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "yadaseed3.hashrank.top",
@@ -810,7 +820,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(479700, None)],
+                "ranges": [(479700, 482760)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.supahash.com",
@@ -826,7 +836,7 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(480100, None)],
+                "ranges": [(480100, 482760)],
                 "node": ServiceProvider.from_dict(
                     {
                         "host": "serviceprovider.nephotim.co",
@@ -842,18 +852,18 @@ class ServiceProviders(Nodes):
                 ),
             },
             {
-                "ranges": [(505600, None)],
+                "ranges": [(482760, None)],
                 "node": ServiceProvider.from_dict(
                     {
-                        "host": "serviceprovider.rogue-miner.com",
-                        "port": 8003,
+                        "host": "45.151.126.94",
+                        "port": 8000,
                         "identity": {
                             "username": "",
-                            "username_signature": "MEUCIQDgXK4dHUpOAiqfaItWyweWijHRGez+k071wEvqSKm9rgIgZA7MJEjvHSN1FDrnMVsSKx2j74q4gaUiYcs+WYW261M=",
-                            "public_key": "024321b0dc01c7d200e2d2f5b4f0a15883fb3dc91f7ff1df36daa7a195defcd171",
+                            "username_signature": "MEUCIQCEI8e2bXOUhfcsZoCajZaCAeJ/fDQHhLtEJ5KOVxaqAwIgWMk1ZG6KLjJq5gU6WiWmmVVxnZ+dAC1M5MuASI7ulfE=",
+                            "public_key": "03834413e444fd2a7065e99ea93a64e3fc9ea3a2b955a1ee3226bdc6a054d105a5",
                         },
-                        "seed_gateway": "MEUCIQC/PWvXpjny1yDGDPRtBzl6g7Lb9lcUuI0v0Kf6wxYi4AIgeRb5PtNhO2Eks6iiPEBuebKuXSeTM9euU9sWqOZYUec=",
-                        "seed": "MEUCIQD0MsT34TkNpYL5kOhLA/4E4YY+SzFhHtIPWPzHCShVGwIgYlzAQeujWvesmU6ZWrTMRwtLFFtjePZjLJDJjTMEQlc==",
+                        "seed_gateway": "MEUCIQDzawJsltO8W23JyxJ2jRvp5dkw3EV4+goD7i58eX23UwIgaTCE4G6D4FlwPzjxozc2nS9TMoUnj5DZw68Vwu6Lnyo=",
+                        "seed": "MEQCICpNCiUo/a2yNAU8Jf1fYFzX+13aUsV+zAi3UuY/rD9EAiAbykyNZo52cwoIMfAKQYjSB9s48P1gIOVgp4kyyq6VAA==",
                     }
                 ),
             },
