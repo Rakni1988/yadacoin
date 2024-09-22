@@ -64,19 +64,13 @@ async def test_node(node, semaphore):
             if "stream" in locals() and not stream.closed():
                 stream.close()
 
+
 async def test_all_nodes(nodes):
     # Limit the number of concurrent tasks
     semaphore = asyncio.Semaphore(50)  # Adjust the limit as needed
     tasks = [test_node(node, semaphore) for node in nodes]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     successful_nodes = [node for node in results if node is not None]
-    
-    # Sprawdzenie, czy żadna z prób nie była udana
-    if not successful_nodes:
-        config = Config()
-        config.app_log.warning("All nodes are offline. Returning the full list of nodes.")
-        return nodes  # Zwraca pełną listę węzłów, jeśli wszystkie są offline
-    
     return successful_nodes
 
 
@@ -454,19 +448,13 @@ class Block(object):
             txn1 = txn_hashes[i]
             try:
                 txn2 = txn_hashes[i + 1]
-            except IndexError:
+            except:
                 txn2 = ""
-
-            combined = txn1 + txn2
-            hash_result = hashlib.sha256(combined.encode("utf-8")).digest().hex()
-
-            hashes.append(hash_result)
-
+            hashes.append(hashlib.sha256((txn1 + txn2).encode("utf-8")).digest().hex())
         if len(hashes) > 1:
             return self.get_merkle_root(hashes)
         else:
             return hashes[0]
-
 
     @classmethod
     async def from_dict(cls, block):
@@ -539,7 +527,6 @@ class Block(object):
 
     async def verify(self):
         getcontext().prec = 8
-
         if int(self.version) != int(CHAIN.get_version_for_height(self.index)):
             raise Exception(
                 "Wrong version for block height",
@@ -548,18 +535,17 @@ class Block(object):
             )
 
         txns = self.get_transaction_hashes()
-
         verify_merkle_root = self.get_merkle_root(txns)
         if verify_merkle_root != self.merkle_root:
-            self.app_log.error(f"Invalid block merkle root: Expected {self.merkle_root}, got {verify_merkle_root}")
             raise Exception("Invalid block merkle root")
 
         header = self.generate_header()
         hashtest = self.generate_hash_from_header(self.index, header, str(self.nonce))
-
         if self.hash != hashtest:
-            self.app_log.warning(
-                f"Verify error hashtest {hashtest} header {header} nonce {self.nonce}"
+            getLogger("tornado.application").warning(
+                "Verify error hashtest {} header {} nonce {}".format(
+                    hashtest, header, self.nonce
+                )
             )
             raise Exception("Invalid block hash")
 
