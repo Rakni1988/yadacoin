@@ -199,6 +199,18 @@ class ExplorerSearchHandler(BaseHandler):
                 "result": transactions[0]["result"],
             })
 
+        mempool_result = await self.search_in_mempool_by_hash(block_hash)
+        
+        if mempool_result:
+            mempool_result["blockHash"] = "MEMPOOL"
+            mempool_result["blockIndex"] = "MEMPOOL"
+
+            return self.render_as_json({
+                "resultType": "txn_hash",
+                "searchedId": block_hash,
+                "result": [mempool_result],
+            })
+
         return self.render_as_json({})
 
     async def search_by_base64_id(self, txn_id):
@@ -272,6 +284,18 @@ class ExplorerSearchHandler(BaseHandler):
                 "result": transactions,
             })
 
+        mempool_result = await self.search_in_mempool_by_id(txn_id)
+
+        if mempool_result:
+            mempool_result["blockHash"] = "MEMPOOL"
+            mempool_result["blockIndex"] = "MEMPOOL"
+
+            return self.render_as_json({
+                "resultType": "txn_id",
+                "searchedId": txn_id,
+                "result": [mempool_result],
+            })
+
         return self.render_as_json({})
 
     async def search_by_public_key(self, public_key):
@@ -284,6 +308,28 @@ class ExplorerSearchHandler(BaseHandler):
                 "resultType": "block_height",
                 "result": [changetime(x) for x in blocks],
             })
+
+    async def search_in_mempool_by_hash(self, block_hash):
+        try:
+            result = await self.config.mongo.async_db.miner_transactions.find_one(
+                {"hash": block_hash}, {"_id": 0}
+            )
+
+            return result if result else None
+        except Exception as e:
+            print(f"Error searching mempool by hash: {e}")
+            return None
+
+    async def search_in_mempool_by_id(self, txn_id):
+        try:
+            result = await self.config.mongo.async_db.miner_transactions.find_one(
+                {"id": txn_id}, {"_id": 0}
+            )
+
+            return result if result else None
+        except Exception as e:
+            print(f"Error searching mempool by ID: {e}")
+            return None
 
 class ExplorerGetBalance(BaseHandler):
     async def get(self):
