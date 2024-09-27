@@ -54,12 +54,6 @@ class LatestBlock:
 
         if cls.block:
             try:
-                #cls.config.app_log.info(f"Block version: {cls.block.version}")
-                #cls.config.app_log.info(f"Block hash: {cls.block.hash}")
-                #cls.config.app_log.info(f"Block index: {cls.block.index}")
-                #cls.config.app_log.info(f"Block time: {cls.block.time}")
-                #cls.config.app_log.info(f"Block transactions: {cls.block.transactions}")
-
                 if (cls.block.hash != cls.blocktemplate_hash or cls.block.index != cls.blocktemplate_index):
                     cls.blocktemplate_time = int(time.time())
 
@@ -74,6 +68,19 @@ class LatestBlock:
 
                     cls.blocktemplate_index = cls.block.index
                     cls.blocktemplate_hash = cls.block.hash
+
+                current_time = int(time.time())
+                if current_time - cls.blocktemplate_time > 900:
+                    cls.blocktemplate_time = current_time
+
+                    new_block = await Block.init_async(
+                        version=cls.block.version,
+                        block_time=cls.blocktemplate_time,
+                        block_index=cls.block.index + 1,
+                        prev_hash=cls.block.hash,
+                    )
+
+                    cls.blocktemplate_target = await CHAIN.get_target_10min(cls.block, new_block)
 
                 target_hex = hex(cls.blocktemplate_target)[2:].rjust(64, '0')
 
