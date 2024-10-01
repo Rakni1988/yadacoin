@@ -3614,9 +3614,11 @@ var TransactionService = /** @class */ (function () {
                                 }
                                 input_sum += parseFloat(unspent_output.value);
                                 console.log(parseFloat(unspent_output.value));
+                            }
+                            if (input_sum >= transaction_total) {
                                 _this.transaction.outputs.push({
                                     to: _this.key.getAddress(),
-                                    value: input_sum - transaction_total,
+                                    value: (input_sum - transaction_total)
                                 });
                             }
                         }
