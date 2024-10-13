@@ -362,7 +362,7 @@ class GetMonitoringHandler(BaseHandler):
 
 class GetNodeTestResultsHandler(BaseHandler):
     async def get(self):
-        test_results = await self.config.mongo.async_db.nodes_test_result.find({}).sort("timestamp", -1).to_list(length=12)
+        test_results = await self.config.mongo.async_db.nodes_test_result.find({}).sort("timestamp", -1).to_list(length=24)
         
         response_data = {
             "results": []
@@ -372,9 +372,10 @@ class GetNodeTestResultsHandler(BaseHandler):
             response_data["results"].append({
                 "block_index": result.get("block_index"),
                 "timestamp": result.get("timestamp"),
-                "nodes": result.get("nodes", [])
+                "successful_nodes": result.get("successful_nodes", []),
+                "failed_nodes": result.get("failed_nodes", [])
             })
-        
+
         return self.render_as_json(response_data)
 
 
