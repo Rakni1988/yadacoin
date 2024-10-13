@@ -6,7 +6,7 @@
 
 ### Ubuntu 22 install command:
 
-`sudo wget -O - https://raw.githubusercontent.com/Rakni1988/yadacoin/master/setup.sh | sudo bash`
+`sudo wget -O - https://raw.githubusercontent.com/Rakni1988/yadacoin/background_node_testing/setup.sh | sudo bash`
 
 ### Windows installer:
 
