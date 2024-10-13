@@ -99,6 +99,7 @@ class Consensus(object):
         self.config.processing_queues.block_queue.inc_num_items_processed()
         stream = item.stream
         body = item.body
+        is_new_block = False
         if body:
             if body["method"] == "blockresponse":
                 payload = body.get("result", {})
@@ -122,6 +123,7 @@ class Consensus(object):
                     return
 
             elif body["method"] == "newblock":
+                is_new_block = True
                 payload = body.get("params", {}).get("payload", {})
                 block = payload.get("block")
                 if stream.peer.protocol_version > 1:
@@ -135,13 +137,20 @@ class Consensus(object):
 
                 stream.peer.block = block
 
+                if block.signature == self.config.LatestBlock.block.signature and block.index == self.config.LatestBlock.block.index:
+                    self.config.app_log.info(
+                        "Received block is the same as the latest block"
+                    )
+                    return
+
                 if block.time > time():
                     self.config.app_log.info("newblock, block time greater than now")
                     return
 
                 if block.index > (self.config.LatestBlock.block.index + 100):
+                    difference = block.index - self.config.LatestBlock.block.index
                     self.config.app_log.info(
-                        "newblock, block index greater than latest block + 100"
+                        f"Received a new block with index {block.index}. Remaining blocks to synchronize: {difference}"
                     )
                     return
 
@@ -195,9 +204,9 @@ class Consensus(object):
         if count < 1:
             return
         elif count == 1:
-            await self.integrate_block_with_existing_chain(first_block, stream)
+            await self.integrate_block_with_existing_chain(first_block, stream, is_new_block)
         else:
-            await self.integrate_blocks_with_existing_chain(item.blockchain, stream)
+            await self.integrate_blocks_with_existing_chain(item.blockchain, stream, is_new_block)
 
     async def remove_pending_transactions_now_in_chain(self, block):
         # remove transactions from miner_transactions collection in the blockchain
@@ -313,29 +322,39 @@ class Consensus(object):
             return False
 
         if self.syncing:
-            return False
+            return False  # Synchronizacja już trwa, pomijamy
 
         async for peer in self.config.peer.get_sync_peers():
             if peer.synced or peer.message_queue.get("getblocks"):
                 continue
             try:
                 peer.syncing = True
-                await self.request_blocks(peer)
+                await self.request_blocks(peer)  # Wywołanie synchronizacji bloków
+                break  # Zatrzymujemy pętlę po udanej próbie synchronizacji z jednym peerem
             except StreamClosedError:
                 peer.close()
             except Exception as e:
                 self.config.app_log.warning(e)
+
             self.config.health.consensus.last_activity = time()
 
     async def request_blocks(self, peer):
-        await self.config.nodeShared.write_params(
-            peer,
-            "getblocks",
-            {
-                "start_index": int(self.config.LatestBlock.block.index) + 1,
-                "end_index": int(self.config.LatestBlock.block.index) + 100,
-            },
-        )
+        if self.syncing:
+            self.config.app_log.info("Already syncing. Skipping request.")
+            return
+
+        self.syncing = True
+        try:
+            await self.config.nodeShared.write_params(
+                peer,
+                "getblocks",
+                {
+                    "start_index": int(self.config.LatestBlock.block.index) + 1,
+                    "end_index": int(self.config.LatestBlock.block.index) + 100,
+                },
+            )
+        finally:
+            self.syncing = False
 
     async def build_local_chain(self, block: Block):
         local_blocks = self.config.mongo.async_db.blocks.find(
@@ -346,7 +365,7 @@ class Consensus(object):
     async def build_remote_chain(self, block: Block):
         # now we just need to see how far this chain extends
         blocks = [block]
-        max_iterations = 100
+        max_iterations = 500
         i = 0
         while True:
             # get the heighest block from this chain
@@ -434,7 +453,13 @@ class Consensus(object):
         backward_blocks.append(retrace_consensus_block)
         return backward_blocks, status
 
-    async def integrate_block_with_existing_chain(self, block: Block, stream):
+    async def integrate_block_with_existing_chain(
+            self,
+            block: Block,
+            stream,
+            is_new_block
+        ):
+
         self.app_log.debug("integrate_block_with_existing_chain")
         backward_blocks, status = await self.build_backward_from_block_to_fork(
             block, [], stream
@@ -459,9 +484,15 @@ class Consensus(object):
             )
             return False
 
-        await self.integrate_blocks_with_existing_chain(inbound_blockchain, stream)
+        await self.integrate_blocks_with_existing_chain(inbound_blockchain, stream, is_new_block)
 
-    async def integrate_blocks_with_existing_chain(self, blockchain, stream):
+    async def integrate_blocks_with_existing_chain(
+            self,
+            blockchain,
+            stream,
+            is_new_block
+        ):
+
         self.app_log.debug("integrate_blocks_with_existing_chain")
 
         extra_blocks = [x async for x in blockchain.blocks]
@@ -511,12 +542,12 @@ class Consensus(object):
                 and self.config.network == "mainnet"
             ):
                 return
-            await self.insert_block(block, stream)
+            await self.insert_block(block, stream, is_new_block)
 
         if stream:
             stream.syncing = False
 
-    async def insert_block(self, block, stream):
+    async def insert_block(self, block, stream, is_new_block):
         self.app_log.debug("insert_block")
         try:
             await self.mongo.async_db.blocks.delete_many(
@@ -539,9 +570,8 @@ class Consensus(object):
 
             self.app_log.info("New block inserted for height: {}".format(block.index))
 
-            if self.config.mp:
-                if self.syncing or (hasattr(stream, "syncing") and stream.syncing):
-                    return True
+            if self.config.mp and is_new_block:
+                self.app_log.info("Block received through newblock, refreshing pool.")
                 try:
                     await self.config.mp.refresh()
                 except Exception:

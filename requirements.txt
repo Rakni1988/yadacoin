@@ -23,7 +23,7 @@ pyasn1
 PyJWT
 python-jwt
 qrcode==6.1
--e git+https://github.com/pdxwebdev/pyrx#egg=pyrx
+-e git+https://github.com/Rakni1988/pyrx#egg=pyrx
 pbkdf2
 asyncstdlib
 GitPython

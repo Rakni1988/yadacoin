@@ -39,39 +39,52 @@ def quantize_eight(value):
     value = value.quantize(Decimal("0.00000000"))
     return value
 
-
-async def test_node(node, semaphore):
-    config = Config()
+async def test_node(node, semaphore, min_balance, config):
     async with semaphore:
         try:
-            stream = await TCPClient().connect(
-                node.host, node.port, timeout=timedelta(seconds=1)
+            stream = await TCPClient().connect(node.host, node.port, timeout=timedelta(seconds=1))
+
+            address = str(
+                P2PKHBitcoinAddress.from_pubkey(
+                    bytes.fromhex(node.identity.public_key)
+                )
             )
-            return node
+
+            balance = await config.BU.get_final_balance(address)
+
+            if balance >= min_balance:
+                config.app_log.info(f"Node {node.host}:{node.port} (address: {address}) has a balance of {balance}.")
+                return {
+                    "node": node,
+                    "status": "success",
+                    "address": address,
+                    "balance": balance
+                }
+            else:
+                config.app_log.warning(f"Node {node.host}:{node.port} does not meet minimum balance requirements (balance: {balance}).")
+                return {
+                    "node": node,
+                    "status": "fail",
+                    "address": address,
+                    "balance": balance
+                }
         except StreamClosedError:
-            config.app_log.warning(
-                f"Stream closed exception in block generate: testing masternode {node.host}:{node.port}"
-            )
+            config.app_log.warning(f"Stream closed exception in block generate: testing masternode {node.host}:{node.port}")
         except TimeoutError:
-            config.app_log.warning(
-                f"Timeout exception in block generate: testing masternode {node.host}:{node.port}"
-            )
+            config.app_log.warning(f"Timeout exception in block generate: testing masternode {node.host}:{node.port}")
         except Exception as e:
-            config.app_log.warning(
-                f"Unhandled exception in block generate: testing masternode {node.host}:{node.port}, error: {e}"
-            )
+            config.app_log.warning(f"Unhandled exception in block generate: testing masternode {node.host}:{node.port}, error: {e}")
         finally:
             if "stream" in locals() and not stream.closed():
                 stream.close()
 
+        return {
+            "node": node,
+            "status": "error",
+            "address": None,
+            "balance": None
+        }
 
-async def test_all_nodes(nodes):
-    # Limit the number of concurrent tasks
-    semaphore = asyncio.Semaphore(50)  # Adjust the limit as needed
-    tasks = [test_node(node, semaphore) for node in nodes]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    successful_nodes = [node for node in results if node is not None]
-    return successful_nodes
 
 
 class CoinbaseRule1(Exception):
@@ -115,6 +128,7 @@ class UnknownOutputAddressException(Exception):
 
 
 class Block(object):
+    successful_nodes = []
     # Memory optimization
     __slots__ = (
         "app_log",
@@ -136,6 +150,7 @@ class Block(object):
         "target",
         "special_target",
         "header",
+        "is_verified"
     )
 
     @classmethod
@@ -187,6 +202,7 @@ class Block(object):
             self.special_target = self.target
             # TODO: do we need recalc special target here if special min?
         self.header = header
+        self.is_verified = False
 
         self.transactions = []
         for txn in transactions or []:
@@ -198,6 +214,44 @@ class Block(object):
 
     async def copy(self):
         return await Block.from_json(self.to_json())
+
+    @classmethod
+    async def test_all_nodes(cls, min_balance):
+        config = Config()
+
+        block_index = config.LatestBlock.block.index
+        nodes = Nodes.get_all_nodes_for_block_height(block_index)
+        semaphore = asyncio.Semaphore(50)
+        tasks = [test_node(node, semaphore, min_balance, config) for node in nodes]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        test_results = {
+            "block_index": block_index,
+            "timestamp": int(time.time()),
+            "successful_nodes": [],
+            "failed_nodes": []
+        }
+
+        successful_nodes = []
+
+        for result in results:
+            node_data = {
+                "host": result["node"].host,
+                "port": result["node"].port,
+                "address": result["address"],
+                "balance": result["balance"],
+                "test_status": result["status"]
+            }
+
+            if result["status"] == "success":
+                test_results["successful_nodes"].append(node_data)
+                successful_nodes.append(result["node"])
+            else:
+                test_results["failed_nodes"].append(node_data)
+
+        await config.mongo.async_db.nodes_test_result.insert_one(test_results)
+
+        return successful_nodes
 
     @classmethod
     async def generate(
@@ -255,6 +309,7 @@ class Block(object):
         block_reward = CHAIN.get_block_reward(index)
         if index >= CHAIN.PAY_MASTER_NODES_FORK:
             nodes = Nodes.get_all_nodes_for_block_height(config.LatestBlock.block.index)
+
             outputs = [
                 Output.from_dict(
                     {
@@ -265,9 +320,18 @@ class Block(object):
                     }
                 )
             ]
+            
             masternode_reward_total = block_reward * 0.1
 
-            successful_nodes = await test_all_nodes(nodes)
+            if not Block.successful_nodes:
+                Block.successful_nodes = await Block.test_all_nodes(min_balance=1000)
+            config.app_log.info(f"Successful nodes after update: {Block.successful_nodes}")
+            successful_nodes = Block.successful_nodes
+
+            if not successful_nodes:
+                config.app_log.warning("No successful nodes found, using full node list as fallback.")
+                successful_nodes = nodes
+
             if successful_nodes:
                 if index >= CHAIN.CHECK_MASTERNODE_FEE_FORK:
                     masternode_fee_sum = sum(
@@ -280,9 +344,8 @@ class Block(object):
                         masternode_reward_total + masternode_fee_sum
                     ) / len(successful_nodes)
                 else:
-                    masternode_reward_divided = masternode_reward_total / len(
-                        successful_nodes
-                    )
+                    masternode_reward_divided = masternode_reward_total / len(successful_nodes)
+
                 for successful_node in successful_nodes:
                     outputs.append(
                         Output.from_dict(
@@ -290,9 +353,7 @@ class Block(object):
                                 "value": float(masternode_reward_divided),
                                 "to": str(
                                     P2PKHBitcoinAddress.from_pubkey(
-                                        bytes.fromhex(
-                                            successful_node.identity.public_key
-                                        )
+                                        bytes.fromhex(successful_node.identity.public_key)
                                     )
                                 ),
                             }
@@ -677,6 +738,8 @@ class Block(object):
                     fee_sum,
                     (coinbase_sum - reward),
                 )
+
+        self.is_verified = True
 
     def get_transaction_hashes(self):
         """Returns a sorted list of tx hash, so the merkle root is constant across nodes"""

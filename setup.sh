@@ -1,34 +1,33 @@
-#/bin/bash
+#!/bin/bash
 
-# Install MongoDB
+# Install MongoDB 4.4
 sudo mkdir /data/db -p
 sudo chmod 777 /data/db
 sudo apt-get install -y gnupg
 if [[ $(lsb_release -rs) == "22.04" ]]; then
-sudo sed -i "/#\$nrconf{restart} = 'i';/s/.*/\$nrconf{restart} = 'a';/" /etc/needrestart/needrestart.conf # prevent interactive prompt
-wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.0g-2ubuntu4_amd64.deb
-sudo dpkg -i ./libssl1.1_1.1.0g-2ubuntu4_amd64.deb
-rm -rf libssl1.1_1.1.0g-2ubuntu4_amd64.deb
+    sudo sed -i "/#\$nrconf{restart} = 'i';/s/.*/\$nrconf{restart} = 'a';/" /etc/needrestart/needrestart.conf # prevent interactive prompt
+    wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.0g-2ubuntu4_amd64.deb
+    sudo dpkg -i ./libssl1.1_1.1.0g-2ubuntu4_amd64.deb
+    rm -rf libssl1.1_1.1.0g-2ubuntu4_amd64.deb
 fi
+
+# Install MongoDB 4.4.29
 wget -qO - https://www.mongodb.org/static/pgp/server-4.4.asc | sudo apt-key add -
-if [[ $(lsb_release -rs) == "20.04" ]]; then
-echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-4.4.list
-else
-echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu bionic/mongodb-org/4.4 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-4.4.list
-fi
+echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu $(lsb_release -cs)/mongodb-org/4.4 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-4.4.list
 sudo apt-get update
-sudo apt-get install -y mongodb-org libssl-dev cmake python3-pip libjpeg-dev build-essential git
+sudo apt-get install -y mongodb-org=4.4.29 mongodb-org-server=4.4.29 mongodb-org-shell=4.4.29 mongodb-org-mongos=4.4.29 mongodb-org-tools=4.4.29 libssl-dev cmake python3-pip libjpeg-dev build-essential git
 
 # Setup and start DB service
 sudo systemctl enable mongod.service
 sudo systemctl start mongod.service
 
-# Get and clone repo
+# Get and clone your repo, switch to specific branch
 cd /etc
-sudo git clone https://github.com/pdxwebdev/yadacoin.git
+sudo git clone https://github.com/Rakni1988/yadacoin.git
 cd yadacoin
+sudo git checkout background_node_testing
 
-# create sysemd file yadanode.service
+# create systemd file yadanode.service
 sudo bash -c "cat > /lib/systemd/system/yadanode.service" << EOL
 [Unit]
 Description=Yada_Node
@@ -52,11 +51,12 @@ EOL
 sudo -H python3 -m pip install --upgrade pip
 sudo -H python3 -m pip install pyopenssl --upgrade
 sudo -H python3 -m pip install -r requirements.txt
-# get the correct chardet and urllib3 versions for yada code
+
+# Get the correct versions for requests library
 sudo python3 -m pip install --upgrade requests
 
 # hugepages reservation
-sudo bash -c "echo vm.nr_hugepages=1280 >> /etc/sysctl.conf"
+# sudo bash -c "echo vm.nr_hugepages=1280 >> /etc/sysctl.conf"
 
 # enable systemd startup
 sudo systemctl enable yadanode.service
@@ -64,7 +64,7 @@ sudo systemctl enable yadanode.service
 # start the yadanode.service
 sudo systemctl start yadanode.service
 
-# display message post installation
+# Display message post installation
 sudo bash -c "cat > /etc/yadacoin/WELCOME" << EOL
 Congrats you have installed a full node on the YADACOIN network!
 Thank you for the support! With each new node, the network become more redundant

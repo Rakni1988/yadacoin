@@ -132,11 +132,12 @@ class Blockchain(object):
     @staticmethod
     async def test_block(block, extra_blocks=[], simulate_last_block=None):
         config = Config()
-        try:
-            await block.verify()
-        except Exception as e:
-            config.app_log.warning("Integrate block error 1: {}".format(e))
-            return False
+        if not block.is_verified:
+            try:
+                await block.verify()
+            except Exception as e:
+                config.app_log.warning("Integrate block error 1: {}".format(e))
+                return False
 
         if block.index == 0:
             return True

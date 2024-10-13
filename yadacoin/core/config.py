@@ -147,7 +147,7 @@ class Config:
         self.peers_wait = config.get("peers_wait", 30)
         self.status_wait = config.get("status_wait", 10)
         self.txn_queue_processor_wait = config.get("txn_queue_processor_wait", 10)
-        self.block_queue_processor_wait = config.get("block_queue_processor_wait", 10)
+        self.block_queue_processor_wait = config.get("block_queue_processor_wait", 1)
         self.block_checker_wait = config.get("block_checker_wait", 1)
         self.message_sender_wait = config.get("message_sender_wait", 10)
         self.pool_payer_wait = config.get("pool_payer_wait", 120)

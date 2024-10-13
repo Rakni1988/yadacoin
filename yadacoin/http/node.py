@@ -360,6 +360,23 @@ class GetMonitoringHandler(BaseHandler):
         op_data["pool"] = pool_data
         self.render_as_json(op_data, indent=4)
 
+class GetNodeTestResultsHandler(BaseHandler):
+    async def get(self):
+        test_results = await self.config.mongo.async_db.nodes_test_result.find({}).sort("timestamp", -1).to_list(length=12)
+        
+        response_data = {
+            "results": []
+        }
+        
+        for result in test_results:
+            response_data["results"].append({
+                "block_index": result.get("block_index"),
+                "timestamp": result.get("timestamp"),
+                "nodes": result.get("nodes", [])
+            })
+        
+        return self.render_as_json(response_data)
+
 
 NODE_HANDLERS = [
     (r"/get-latest-block", GetLatestBlockHandler),
@@ -379,4 +396,5 @@ NODE_HANDLERS = [
     (r"/get-expired-smart-contract-transaction", GetExpiredSmartContractTransaction),
     (r"/get-trigger-transactions", GetSmartContractTriggerTransaction),
     (r"/get-monitoring", GetMonitoringHandler),
+    (r"/get-node-test-results", GetNodeTestResultsHandler),
 ]
