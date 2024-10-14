@@ -3,6 +3,7 @@ import base64
 import binascii
 import hashlib
 import json
+import socket
 import time
 from datetime import timedelta
 from decimal import Decimal, getcontext
@@ -39,52 +40,86 @@ def quantize_eight(value):
     value = value.quantize(Decimal("0.00000000"))
     return value
 
-async def test_node(node, semaphore, min_balance, config):
+async def test_node(
+    node,
+    semaphore,
+    min_balance,
+    config,
+    retries=2,
+    delay=2
+):
     async with semaphore:
         try:
-            stream = await TCPClient().connect(node.host, node.port, timeout=timedelta(seconds=1))
+            resolved_ip = socket.gethostbyname(node.host)
+            config.app_log.info(f"Resolved {node.host} to {resolved_ip}")
+        except socket.gaierror:
+            config.app_log.warning(f"DNS resolution error for {node.host}")
+            return {
+                "node": node,
+                "status": "DNSResolutionError",
+                "address": None,
+                "balance": None,
+                "error": "DNSResolutionError"
+            }
 
-            address = str(
-                P2PKHBitcoinAddress.from_pubkey(
-                    bytes.fromhex(node.identity.public_key)
+        for attempt in range(retries + 1):
+            error = None
+            try:
+                stream = await TCPClient().connect(resolved_ip, node.port, timeout=timedelta(seconds=2))
+
+                address = str(
+                    P2PKHBitcoinAddress.from_pubkey(
+                        bytes.fromhex(node.identity.public_key)
+                    )
                 )
-            )
 
-            balance = await config.BU.get_final_balance(address)
+                balance = await config.BU.get_final_balance(address)
 
-            if balance >= min_balance:
-                config.app_log.info(f"Node {node.host}:{node.port} (address: {address}) has a balance of {balance}.")
-                return {
-                    "node": node,
-                    "status": "success",
-                    "address": address,
-                    "balance": balance
-                }
+                if balance >= min_balance:
+                    config.app_log.info(f"Node {node.host}:{node.port} (address: {address}) has a balance of {balance}.")
+                    return {
+                        "node": node,
+                        "status": "success",
+                        "address": address,
+                        "balance": balance,
+                        "error": None
+                    }
+                else:
+                    config.app_log.warning(f"Node {node.host}:{node.port} does not meet minimum balance requirements (balance: {balance}).")
+                    return {
+                        "node": node,
+                        "status": "Insufficient funds",
+                        "address": address,
+                        "balance": balance,
+                        "error": None
+                    }
+
+            except StreamClosedError:
+                config.app_log.warning(f"Stream closed exception for {node.host}:{node.port}")
+                error = "StreamClosedError"
+            except TimeoutError:
+                config.app_log.warning(f"Timeout exception for {node.host}:{node.port}")
+                error = "TimeoutError"
+            except Exception as e:
+                config.app_log.warning(f"Unhandled exception in block for {node.host}:{node.port}, error: {e}")
+                error = str(e)
+            finally:
+                if "stream" in locals() and not stream.closed():
+                    stream.close()
+
+            if error in ["TimeoutError"] and attempt < retries:
+                config.app_log.info(f"Retrying test for {node.host}:{node.port} after {delay} seconds (attempt {attempt + 1}/{retries})")
+                await asyncio.sleep(delay)
             else:
-                config.app_log.warning(f"Node {node.host}:{node.port} does not meet minimum balance requirements (balance: {balance}).")
-                return {
-                    "node": node,
-                    "status": "fail",
-                    "address": address,
-                    "balance": balance
-                }
-        except StreamClosedError:
-            config.app_log.warning(f"Stream closed exception in block generate: testing masternode {node.host}:{node.port}")
-        except TimeoutError:
-            config.app_log.warning(f"Timeout exception in block generate: testing masternode {node.host}:{node.port}")
-        except Exception as e:
-            config.app_log.warning(f"Unhandled exception in block generate: testing masternode {node.host}:{node.port}, error: {e}")
-        finally:
-            if "stream" in locals() and not stream.closed():
-                stream.close()
+                break
 
         return {
             "node": node,
-            "status": "error",
+            "status": "error" if error else "fail",
             "address": None,
-            "balance": None
+            "balance": None,
+            "error": error
         }
-
 
 
 class CoinbaseRule1(Exception):
@@ -218,10 +253,9 @@ class Block(object):
     @classmethod
     async def test_all_nodes(cls, min_balance):
         config = Config()
-
         block_index = config.LatestBlock.block.index
         nodes = Nodes.get_all_nodes_for_block_height(block_index)
-        semaphore = asyncio.Semaphore(50)
+        semaphore = asyncio.Semaphore(25)
         tasks = [test_node(node, semaphore, min_balance, config) for node in nodes]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -235,19 +269,20 @@ class Block(object):
         successful_nodes = []
 
         for result in results:
-            node_data = {
+            node_info = {
                 "host": result["node"].host,
                 "port": result["node"].port,
-                "address": result["address"],
-                "balance": result["balance"],
-                "test_status": result["status"]
+                "address": result.get("address"),
+                "balance": result.get("balance"),
+                "test_status": result.get("status"),
+                "error": result.get("error")
             }
 
             if result["status"] == "success":
-                test_results["successful_nodes"].append(node_data)
+                test_results["successful_nodes"].append(node_info)
                 successful_nodes.append(result["node"])
             else:
-                test_results["failed_nodes"].append(node_data)
+                test_results["failed_nodes"].append(node_info)
 
         await config.mongo.async_db.nodes_test_result.insert_one(test_results)
 

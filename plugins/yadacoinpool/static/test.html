@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Node Test Results</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        /* Stylizacja tabeli */
+        #nodeTestTable {
+            width: 95%;
+            border-collapse: collapse;
+            margin: 20px 20px;
+            font-size: 0.7em;
+            font-family: sans-serif;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
+        }
+
+        #nodeTestTable thead tr {
+            background-color: #009879;
+            color: #ffffff;
+            text-align: center;
+        }
+
+        #nodeTestTable th, #nodeTestTable td {
+            padding: 12px 15px;
+        }
+
+        #nodeTestTable tbody tr {
+            border-bottom: 1px solid #dddddd;
+        }
+
+        #nodeTestTable tbody tr:nth-of-type(even) {
+            background-color: #f3f3f3;
+        }
+
+        #nodeTestTable tbody tr:last-of-type {
+            border-bottom: 2px solid #009879;
+        }
+
+        #nodeTestTable tbody td {
+            text-align: center;
+        }
+
+        #chart-container {
+            width: 80%;
+            margin: 0 auto;
+        }
+    </style>
+</head>
+<body>
+
+<div id="chart-container">
+    <canvas id="nodeTestChart"></canvas>
+</div>
+
+<table id="nodeTestTable">
+    <thead>
+        <tr>
+            <th>Host</th>
+
+        </tr>
+    </thead>
+    <tbody>
+
+    </tbody>
+</table>
+
+<script type="text/javascript">
+    async function fetchTestData() {
+        const response = await fetch('/get-node-test-results');
+        const data = await response.json();
+        return data.results;
+    }
+
+    function renderChart(testResults) {
+        const labels = testResults.map(result => new Date(result.timestamp * 1000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
+
+        const successfulNodes = testResults.map(result => result.successful_nodes.length);
+        const insufficientFundsNodes = testResults.map(result => 
+            result.failed_nodes.filter(node => node.test_status === 'Insufficient funds' || node.test_status === 'fail').length
+        );
+        const errorNodes = testResults.map(result => result.failed_nodes.filter(node => node.test_status === 'error' || node.test_status === 'DNSResolutionError').length);
+
+        const ctx = document.getElementById('nodeTestChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Successful Nodes',
+                        data: successfulNodes,
+                        borderColor: 'green',
+                        fill: false
+                    },
+                    {
+                        label: 'Insufficient Funds',
+                        data: insufficientFundsNodes,
+                        borderColor: 'yellow',
+                        fill: false
+                    },
+                    {
+                        label: 'Error Nodes',
+                        data: errorNodes,
+                        borderColor: 'red',
+                        fill: false
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            stepSize: 1
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    function generateNodeTable(results) {
+        const tableHead = document.querySelector("#nodeTestTable thead tr");
+        const tableBody = document.querySelector("#nodeTestTable tbody");
+
+        tableHead.innerHTML = '<th>Host</th>';
+        tableBody.innerHTML = '';
+
+        for (let i = 1; i <= 24; i++) {
+            tableHead.innerHTML += `<th>${i}</th>`;
+        }
+
+        const allHosts = new Set();
+        results.forEach(result => {
+            result.successful_nodes.forEach(node => allHosts.add(node.host));
+            result.failed_nodes.forEach(node => allHosts.add(node.host));
+        });
+
+        allHosts.forEach(host => {
+            let currentTableRow = `<tr><td>${host}</td>`;
+
+            for (let i = 0; i < 24; i++) {
+                const result = results[i];
+
+                let testNode = result.successful_nodes.find(node => node.host === host) ||
+                               result.failed_nodes.find(node => node.host === host);
+
+                if (testNode) {
+                    if (testNode.test_status === 'success') {
+                        currentTableRow += `<td style="text-align:center;color:green;">&#10004;</td>`;
+                    } else if (testNode.test_status === 'Insufficient funds' || testNode.test_status === 'fail') {
+                        currentTableRow += `<td style="text-align:center;color:orange;">&#36;</td>`;
+                    } else if (testNode.test_status === 'error') {
+                        currentTableRow += `<td style="text-align:center;color:red;">&#10006;</td>`;
+                    } else if (testNode.test_status === 'DNSResolutionError') {
+                        currentTableRow += `<td style="text-align:center;color:red;">DNS</td>`;
+                    }
+                } else {
+                    currentTableRow += '<td style="text-align:center;">-</td>';
+                }
+            }
+
+            currentTableRow += '</tr>';
+            tableBody.innerHTML += currentTableRow;
+        });
+    }
+
+    async function renderTestResults() {
+        const testResults = await fetchTestData();
+        generateNodeTable(testResults);
+        renderChart(testResults);
+    }
+
+    document.addEventListener("DOMContentLoaded", renderTestResults);
+</script>
+
+</body>
+</html>
