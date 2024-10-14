@@ -131,13 +131,15 @@
         tableBody.innerHTML = '';
 
         for (let i = 1; i <= 24; i++) {
-            tableHead.innerHTML += `<th>${i}</th>`;
+            tableHead.innerHTML += `<th>Test ${i}</th>`;
         }
 
         const allHosts = new Set();
         results.forEach(result => {
-            result.successful_nodes.forEach(node => allHosts.add(node.host));
-            result.failed_nodes.forEach(node => allHosts.add(node.host));
+            if (result && result.successful_nodes && result.failed_nodes) {
+                result.successful_nodes.forEach(node => allHosts.add(node.host));
+                result.failed_nodes.forEach(node => allHosts.add(node.host));
+            }
         });
 
         allHosts.forEach(host => {
@@ -146,18 +148,22 @@
             for (let i = 0; i < 24; i++) {
                 const result = results[i];
 
-                let testNode = result.successful_nodes.find(node => node.host === host) ||
-                               result.failed_nodes.find(node => node.host === host);
+                if (result) {
+                    let testNode = result.successful_nodes?.find(node => node.host === host) ||
+                                   result.failed_nodes?.find(node => node.host === host);
 
-                if (testNode) {
-                    if (testNode.test_status === 'success') {
-                        currentTableRow += `<td style="text-align:center;color:green;">&#10004;</td>`;
-                    } else if (testNode.test_status === 'Insufficient funds' || testNode.test_status === 'fail') {
-                        currentTableRow += `<td style="text-align:center;color:orange;">&#36;</td>`;
-                    } else if (testNode.test_status === 'error') {
-                        currentTableRow += `<td style="text-align:center;color:red;">&#10006;</td>`;
-                    } else if (testNode.test_status === 'DNSResolutionError') {
-                        currentTableRow += `<td style="text-align:center;color:red;">DNS</td>`;
+                    if (testNode) {
+                        if (testNode.test_status === 'success') {
+                            currentTableRow += `<td style="text-align:center;color:green;">&#10004;</td>`;
+                        } else if (testNode.test_status === 'Insufficient funds' || testNode.test_status === 'fail') {
+                            currentTableRow += `<td style="text-align:center;color:orange;">&#36;</td>`;
+                        } else if (testNode.test_status === 'error') {
+                            currentTableRow += `<td style="text-align:center;color:red;">&#10006;</td>`;
+                        } else if (testNode.error === 'DNSResolutionError') {
+                            currentTableRow += `<td style="text-align:center;color:red;">DNS</td>`;
+                        }
+                    } else {
+                        currentTableRow += '<td style="text-align:center;">-</td>';
                     }
                 } else {
                     currentTableRow += '<td style="text-align:center;">-</td>';
