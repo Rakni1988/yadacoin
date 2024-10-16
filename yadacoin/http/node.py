@@ -373,6 +373,7 @@ class GetNodeTestResultsHandler(BaseHandler):
             response_data["results"].append({
                 "block_index": result.get("block_index"),
                 "timestamp": result.get("timestamp"),
+                "test_duration": result.get("test_duration"),
                 "successful_nodes": result.get("successful_nodes", []),
                 "failed_nodes": result.get("failed_nodes", [])
             })

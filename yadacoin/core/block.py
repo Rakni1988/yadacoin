@@ -256,12 +256,17 @@ class Block(object):
         block_index = config.LatestBlock.block.index
         nodes = Nodes.get_all_nodes_for_block_height(block_index)
         semaphore = asyncio.Semaphore(25)
+        start_time = time.time()
         tasks = [test_node(node, semaphore, min_balance, config) for node in nodes]
         results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        end_time = time.time()
+        test_duration = end_time - start_time
 
         test_results = {
             "block_index": block_index,
             "timestamp": int(time.time()),
+            "test_duration": test_duration,
             "successful_nodes": [],
             "failed_nodes": []
         }
