@@ -322,15 +322,15 @@ class Consensus(object):
             return False
 
         if self.syncing:
-            return False  # Synchronizacja już trwa, pomijamy
+            return False
 
         async for peer in self.config.peer.get_sync_peers():
             if peer.synced or peer.message_queue.get("getblocks"):
                 continue
             try:
                 peer.syncing = True
-                await self.request_blocks(peer)  # Wywołanie synchronizacji bloków
-                break  # Zatrzymujemy pętlę po udanej próbie synchronizacji z jednym peerem
+                await self.request_blocks(peer)
+                break
             except StreamClosedError:
                 peer.close()
             except Exception as e:

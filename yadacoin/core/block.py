@@ -45,13 +45,14 @@ async def test_node(
     semaphore,
     min_balance,
     config,
-    retries=2,
-    delay=2
+    use_cache=True,
+    retries=1,
+    delay=1
 ):
     async with semaphore:
         try:
             resolved_ip = socket.gethostbyname(node.host)
-            config.app_log.info(f"Resolved {node.host} to {resolved_ip}")
+            config.app_log.debug(f"Resolved {node.host} to {resolved_ip}")
         except socket.gaierror:
             config.app_log.warning(f"DNS resolution error for {node.host}")
             return {
@@ -73,7 +74,10 @@ async def test_node(
                     )
                 )
 
-                balance = await config.BU.get_final_balance(address)
+                if use_cache:
+                    balance = await config.BU.get_cached_final_balance(address)
+                else:
+                    balance = await config.BU.get_final_balance(address)
 
                 if balance >= min_balance:
                     config.app_log.info(f"Node {node.host}:{node.port} (address: {address}) has a balance of {balance}.")
@@ -251,13 +255,17 @@ class Block(object):
         return await Block.from_json(self.to_json())
 
     @classmethod
-    async def test_all_nodes(cls, min_balance):
+    async def test_all_nodes(cls, min_balance, use_cache=True):
         config = Config()
         block_index = config.LatestBlock.block.index
         nodes = Nodes.get_all_nodes_for_block_height(block_index)
         semaphore = asyncio.Semaphore(25)
+
         start_time = time.time()
-        tasks = [test_node(node, semaphore, min_balance, config) for node in nodes]
+
+        tasks = [
+            test_node(node, semaphore, min_balance, config, use_cache=use_cache) for node in nodes
+        ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         end_time = time.time()
@@ -267,6 +275,7 @@ class Block(object):
             "block_index": block_index,
             "timestamp": int(time.time()),
             "test_duration": test_duration,
+            "use_cache": use_cache,
             "successful_nodes": [],
             "failed_nodes": []
         }

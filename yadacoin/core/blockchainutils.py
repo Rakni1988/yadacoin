@@ -192,6 +192,118 @@ class BlockChainUtils(object):
         total_balance = await self.get_final_balance(address)
         return total_balance
 
+    async def get_cached_final_balance(self, address):
+        collection = self.mongo.async_db.mn_balance_data
+
+        self.config.app_log.info(f"Fetching cached balance for {address}")
+        last_cached_balance = await collection.find_one({"address": address})
+
+        if last_cached_balance:
+            last_block_index = last_cached_balance["block_index"]
+            last_block_hash = last_cached_balance["block_hash"]
+
+
+            current_block = await self.mongo.async_db.blocks.find_one({"index": last_block_index})
+
+            if current_block and current_block["hash"] == last_block_hash:
+                
+                new_balance = await self.calculate_balance_change_from_last_block(
+                    address, last_block_index, self.config.LatestBlock.block.index
+                )
+
+                total_balance = last_cached_balance["balance"] + new_balance
+
+                self.config.app_log.info(f"Previous balance: {last_cached_balance['balance']}, New balance: {total_balance} (Change: {new_balance})")
+
+                await collection.update_one(
+                    {"address": address},
+                    {
+                        "$set": {
+                            "balance": total_balance,
+                            "block_index": self.config.LatestBlock.block.index,
+                            "block_hash": self.config.LatestBlock.block.hash,
+                            "timestamp": time()
+                        }
+                    },
+                    upsert=True
+                )
+
+                return total_balance
+            else:
+                self.config.app_log.warning(f"Fork detected or inconsistent data for {address}, recalculating balance from scratch.")
+        
+        total_balance = await self.get_final_balance(address)
+        self.config.app_log.info(f"Recalculated total balance for {address}: {total_balance}")
+
+        await collection.update_one(
+            {"address": address},
+            {
+                "$set": {
+                    "balance": total_balance,
+                    "block_index": self.config.LatestBlock.block.index,
+                    "block_hash": self.config.LatestBlock.block.hash,
+                    "timestamp": time()
+                }
+            },
+            upsert=True
+        )
+
+        return total_balance
+
+    async def calculate_balance_change_from_last_block(self, address, start_index, end_index):
+        self.config.app_log.info(f"Calculating balance change for {address} from block {start_index} to {end_index}")
+
+        incoming_pipeline = [
+            {"$match": {"index": {"$gt": start_index, "$lte": end_index}}},
+            {"$unwind": "$transactions"},
+            {"$unwind": "$transactions.outputs"},
+            {"$match": {"transactions.outputs.to": address, "transactions.public_key": {"$ne": await self.get_reverse_public_key(address)}}},
+            {
+                "$group": {
+                    "_id": None,
+                    "balance_change": {"$sum": "$transactions.outputs.value"}
+                }
+            }
+        ]
+
+        incoming_result = await self.mongo.async_db.blocks.aggregate(incoming_pipeline).to_list(length=1)
+        balance_change = incoming_result[0]["balance_change"] if incoming_result else 0.0
+
+        self.config.app_log.info(f"Incoming transactions balance change (excluding self-transactions) for {address}: {balance_change}")
+
+        spent_pipeline = [
+            {"$match": {"index": {"$gt": start_index, "$lte": end_index}}},
+            {"$unwind": "$transactions"},
+            {"$match": {"transactions.public_key": await self.get_reverse_public_key(address)}}
+        ]
+
+        transactions = await self.mongo.async_db.blocks.aggregate(spent_pipeline).to_list(length=None)
+
+        total_spent = 0.0
+
+        for tx in transactions:
+            fee = tx["transactions"].get("fee", 0.0)
+
+            total_outputs = sum(output["value"] for output in tx["transactions"]["outputs"])
+
+            mn_output = sum(output["value"] for output in tx["transactions"]["outputs"] if output["to"] == address)
+
+            if total_outputs == mn_output:
+                self.config.app_log.info(f"Transaction {tx['transactions']['hash']} is a self-transaction, skipping.")
+                continue
+
+            spent_amount = (total_outputs + fee) - mn_output
+            total_spent += spent_amount
+
+            self.config.app_log.info(f"Transaction {tx['transactions']['hash']} spent: {spent_amount}, fee: {fee}, MN output: {mn_output}, total outputs: {total_outputs}")
+
+        self.config.app_log.info(f"Total spent balance for {address} from block {start_index} to {end_index}: {total_spent}")
+
+        total_change = balance_change - total_spent
+        self.config.app_log.info(f"Total balance change for {address} from block {start_index} to {end_index}: {total_change}")
+
+        return total_change
+
     async def get_public_key_address_pairs(self, address):
         pipeline = [
             {"$match": {"transactions.outputs.to": address}},
