@@ -271,7 +271,7 @@ class Peer:
         streams = await Config().peer.get_outbound_streams()
         for stream in streams:
             if not stream.synced:
-                return False
+                return True
         return True
 
     def to_dict(self):

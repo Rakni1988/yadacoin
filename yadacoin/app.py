@@ -804,7 +804,7 @@ class NodeApplication(Application):
     async def background_nonce_processor(self):
         """Responsible for processing all share submissions from miners"""
 
-        self.config.app_log.debug("background_nonce_processor")
+        #self.config.app_log.debug("background_nonce_processor")
         if not hasattr(self.config, "background_nonce_processor"):
             self.config.background_nonce_processor = WorkerVars(busy=False)
         if self.config.background_nonce_processor.busy:
