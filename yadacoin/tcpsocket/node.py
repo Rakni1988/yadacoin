@@ -731,6 +731,9 @@ class NodeRPC(BaseRPC):
             params = body.get("params", {})
         else:
             params = body.get("result", {})
+
+        self.config.app_log.info(f"Authentication params received: {params}")
+        
         signed_challenge = params.get("signed_challenge")
         result = verify_signature(
             base64.b64decode(signed_challenge),
@@ -739,13 +742,14 @@ class NodeRPC(BaseRPC):
         )
         if result:
             stream.peer.authenticated = True
+            peer_info = params.get("peer", {})
+            stream.peer.node_version = tuple(peer_info.get("node_version", [0, 0, 0]))
             self.config.app_log.info(
                 "Authenticated {}: {}".format(
                     stream.peer.__class__.__name__, stream.peer.to_json()
                 )
             )
             await self.send_block_to_peer(self.config.LatestBlock.block, stream)
-            #await self.get_next_block(self.config.LatestBlock.block)
         else:
             stream.close()
 

@@ -30,6 +30,7 @@ class Peer:
         secure=None,
         protocol_version=3,
         node_version=(0, 0, 0),
+        block_height=None,
         peer_type=None,
     ):
         self.host = host
@@ -45,6 +46,7 @@ class Peer:
         self.protocol_version = protocol_version
         self.authenticated = False
         self.node_version = tuple([int(x) for x in node_version])
+        self.block_height = 0
         self.peer_type = peer_type
 
     @staticmethod
@@ -119,6 +121,7 @@ class Peer:
             secure=peer.get("secure"),
             protocol_version=peer.get("protocol_version", 1),
             node_version=peer.get("node_version", (0, 0, 0)),
+            block_height=peer.get("block_height", 0),
             peer_type=peer.get("peer_type"),
         )
         return inst
@@ -287,6 +290,7 @@ class Peer:
             "secure": self.secure,
             "protocol_version": self.protocol_version,
             "node_version": self.node_version,
+            "block_height": self.block_height,
             "peer_type": self.peer_type,
         }
 
@@ -866,10 +870,15 @@ class User(Peer):
         return [ServiceProvider]
 
     async def get_sync_peers(self):
-        for y in list(
+        peers = list(
             self.config.nodeClient.outbound_streams[ServiceProvider.__name__].values()
-        ):
-            yield y
+        )
+        peers.sort(
+            key=lambda peer: (peer.node_version, peer.block_height),
+            reverse=True
+        )
+        for peer in peers:
+            yield peer
 
     async def get_peer_by_id(self, id_attr):
         return self.config.nodeClient.outbound_streams[ServiceProvider.__name__].get(

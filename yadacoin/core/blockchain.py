@@ -211,12 +211,18 @@ class Blockchain(object):
             if transaction.inputs:
                 failed = False
                 used_ids_in_this_txn = []
+
                 async for x in Blockchain.get_inputs(transaction.inputs):
                     txn = await config.BU.get_transaction_by_id(x.id, instance=True)
                     if not txn:
                         txn = await transaction.find_in_extra_blocks(x)
                         if not txn:
+                            config.app_log.warning(
+                                f"Input transaction not found for ID {x.id} in block {block.index}, "
+                                f"public key: {transaction.public_key}"
+                            )
                             failed = True
+
                     is_input_spent = await config.BU.is_input_spent(
                         x.id,
                         transaction.public_key,
@@ -224,16 +230,35 @@ class Blockchain(object):
                         extra_blocks=extra_blocks,
                     )
                     if is_input_spent:
+                        config.app_log.warning(
+                            f"Input {x.id} already spent by public key {transaction.public_key} "
+                            f"in block {block.index}"
+                        )
                         failed = True
+
                     if x.id in used_ids_in_this_txn:
+                        config.app_log.warning(
+                            f"Input {x.id} reused within the same transaction in block {block.index}, "
+                            f"public key: {transaction.public_key}"
+                        )
                         failed = True
+
                     if (x.id, transaction.public_key) in used_inputs:
+                        existing_txn = used_inputs[(x.id, transaction.public_key)]
+                        config.app_log.warning(
+                            f"Double spend detected: Input {x.id} used multiple times by the same public key "
+                            f"in block {block.index}. First used in transaction: {existing_txn}, "
+                            f"now in transaction: {transaction}"
+                        )
                         failed = True
+
+                    # Add the input to used_inputs and used_ids_in_this_txn
                     used_inputs[(x.id, transaction.public_key)] = transaction
                     used_ids_in_this_txn.append(x.id)
+
                 if failed and block.index >= CHAIN.CHECK_DOUBLE_SPEND_FROM:
                     config.app_log.warning(
-                        f"double spend detected {block.index} {transaction.public_key} {x.id}"
+                        f"Double spend detected {block.index} {transaction.public_key} {x.id}"
                     )
                     return False
                 elif failed and block.index < CHAIN.CHECK_DOUBLE_SPEND_FROM:

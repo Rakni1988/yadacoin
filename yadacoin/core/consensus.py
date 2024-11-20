@@ -135,6 +135,9 @@ class Consensus(object):
 
                 block = await Block.from_dict(block)
 
+                stream.peer.block_height = block.index
+                self.config.app_log.info(f"Updated block height for peer: {stream.peer.host}:{stream.peer.port} -> {block.index}")
+
                 stream.peer.block = block
 
                 if block.signature == self.config.LatestBlock.block.signature and block.index == self.config.LatestBlock.block.index:
