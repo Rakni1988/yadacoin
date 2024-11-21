@@ -873,11 +873,14 @@ class User(Peer):
         peers = list(
             self.config.nodeClient.outbound_streams[ServiceProvider.__name__].values()
         )
-        peers.sort(
-            key=lambda peer: (peer.node_version, peer.block_height),
+
+        sorted_peers = sorted(
+            peers,
+            key=lambda peer: getattr(peer, "node_version", (0, 0, 0)),
             reverse=True
         )
-        for peer in peers:
+
+        for peer in sorted_peers:
             yield peer
 
     async def get_peer_by_id(self, id_attr):
