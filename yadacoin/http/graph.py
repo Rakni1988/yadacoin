@@ -12,6 +12,7 @@ import uuid
 import requests
 from bitcoin.wallet import P2PKHBitcoinAddress
 from coincurve.utils import verify_signature
+from decimal import Decimal
 from eccsnacks.curve25519 import scalarmult_base
 
 from yadacoin.core.collections import Collections
@@ -121,46 +122,112 @@ class GraphRIDWalletHandler(BaseGraphHandler):
     async def get(self):
         address = self.get_query_argument("address")
         amount_needed = self.get_query_argument("amount_needed", None)
+        method = self.get_query_argument("method", "old")
+        
         if amount_needed:
             amount_needed = float(amount_needed)
 
-        mempool_txns = self.config.mongo.async_db.miner_transactions.find(
-            {"outputs.to": address}
-        )
+        mempool_balances = await self.calculate_mempool_balances(address)
 
-        pending_used_inputs = {}
-        pending_balance = 0
-        async for mempool_txn in mempool_txns:
-            xaddress = str(
-                P2PKHBitcoinAddress.from_pubkey(
-                    bytes.fromhex(mempool_txn["public_key"])
-                )
-            )
-            if address == xaddress and mempool_txn.get("inputs"):
-                for x in mempool_txn.get("inputs"):
-                    pending_used_inputs[x["id"]] = mempool_txn
-            if mempool_txn.get("outputs"):
-                for x in mempool_txn.get("outputs"):
-                    if x["to"] == address:
-                        pending_balance += float(x["value"])
+        start_time = time.perf_counter()
 
-        balance = await self.config.BU.get_wallet_balance(address)
+        if method == "new":
+            self.config.app_log.info("Using NEW method for balance and UTXOs.")
+            
+            if amount_needed == 0:
+                balance = await self.config.BU.get_wallet_balance(address)
+                unspent_txns = []
+                locked_balance = mempool_balances["locked_balance"]
+            else:
+                result = await self.config.BU.get_unspent_outputs(address, amount_needed=amount_needed, min_value=0)
+                unspent_txns = result["unspent_utxos"]
+                balance = result["balance"]
 
-        unspent_txns = [
-            x
-            async for x in self.config.BU.get_wallet_unspent_transactions_for_spending(
-                address, inc_mempool=True, amount_needed=amount_needed
-            )
-        ]
+        else:
+            self.config.app_log.info("Using OLD method for balance and UTXOs.")
+            balance = await self.config.BU.get_wallet_balance(address)
+            
+            if amount_needed == 0:
+                unspent_txns = []
+                locked_balance = mempool_balances["locked_balance"]
+            else:
+                unspent_txns = [
+                    x
+                    async for x in self.config.BU.get_wallet_unspent_transactions_for_spending(
+                        address, inc_mempool=True, amount_needed=amount_needed
+                    )
+                ]
+
+        end_time = time.perf_counter()
+        elapsed_time = end_time - start_time
+        self.config.app_log.info(f"Processing time for method '{method}': {elapsed_time:.2f} seconds.")
 
         wallet = {
-            "pending_balance": "{0:.8f}".format(pending_balance),
+            "mempool": {
+                "incoming": "{0:.8f}".format(mempool_balances["incoming"]),
+                "outgoing": "{0:.8f}".format(mempool_balances.get("outgoing", 0.0)),
+                "locked_balance": "{0:.8f}".format(mempool_balances["locked_balance"]),
+            },
+            "pending_balance": "{0:.8f}".format(mempool_balances["incoming"]),
+            "locked_balance": "{0:.8f}".format(mempool_balances["locked_balance"]),
             "chain_balance": "{0:.8f}".format(balance),
             "balance": "{0:.8f}".format(balance),
+            "processing_time_seconds": "{0:.2f}".format(elapsed_time),
             "unspent_transactions": unspent_txns,
         }
         self.render_as_json(wallet, indent=4)
 
+    async def calculate_mempool_balances(self, address):
+        """
+        Calculates incoming, outgoing, and locked_balance for the given address in mempool.
+        """
+        reverse_public_key = await self.config.BU.get_reverse_public_key(address)
+
+        incoming = 0.0
+        locked_balance = 0.0
+        outgoing = 0.0
+
+        # Pobieranie transakcji z mempool
+        mempool_txns = self.config.mongo.async_db.miner_transactions.find(
+            {"$or": [{"outputs.to": address}, {"public_key": reverse_public_key}]}
+        )
+
+        async for txn in mempool_txns:
+            txn_public_key = txn.get("public_key")
+            txn_fee = float(txn.get("fee", 0))
+
+            # Przetwarzanie outputs
+            total_outputs_value = 0.0
+            own_outputs_value = 0.0
+
+            for output in txn.get("outputs", []):
+                output_address = output.get("to")
+                output_value = float(output.get("value", 0))
+
+                # Środki przychodzące (incoming)
+                if output_address == address and txn_public_key != reverse_public_key:
+                    incoming += output_value
+
+                # Wartość wyjść w transakcji (dla outgoing i locked_balance)
+                if output_address == address:
+                    own_outputs_value += output_value
+
+                total_outputs_value += output_value
+
+            # Zablokowane środki (locked_balance)
+            if txn_public_key == reverse_public_key:
+                locked_balance += total_outputs_value + txn_fee
+
+            # Środki wychodzące (outgoing)
+            if txn_public_key == reverse_public_key:
+                outgoing += total_outputs_value + txn_fee - own_outputs_value
+
+        # Zwracanie wyników
+        return {
+            "incoming": round(incoming, 8),
+            "outgoing": round(outgoing, 8),
+            "locked_balance": round(locked_balance, 8),
+        }
 
 class RegistrationHandler(BaseHandler):
     async def get(self):
