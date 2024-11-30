@@ -482,11 +482,18 @@ class BlockChainUtils(object):
         self.config.app_log.info(
             f"Processing UTXOs took {end_processing - start_processing:.2f} seconds"
         )
+
+        if spent_check_count > 0:
+            average_time = spent_check_time / spent_check_count
+        else:
+            average_time = 0.0
+
         self.config.app_log.info(
             f"Spent check statistics: Total checks: {spent_check_count}, "
             f"Total time: {spent_check_time:.2f} seconds, "
-            f"Average time per check: {spent_check_time / spent_check_count:.6f} seconds"
+            f"Average time per check: {average_time:.6f} seconds"
         )
+
         self.config.app_log.info(
             f"Collected enough UTXOs for the requested amount: {amount_needed}. "
             f"Total UTXOs selected: {selected_utxo_count}, Total value: {total:.2f}"
@@ -899,6 +906,12 @@ class BlockChainUtils(object):
         self.config.app_log.info(
             f"Unspent UTXOs: {len(unspent_utxos)}, Total value: {total_collected_value:.16f}"
         )
+
+        if processing_time > 0:
+            unspent_speed = len(unspent_utxos) / processing_time
+        else:
+            unspent_speed = 0.0
+
         self.config.app_log.info(
             f"Processing UTXOs took {processing_time:.6f} seconds, Speed: {unspent_speed:.2f} UTXOs/second"
         )
@@ -907,7 +920,6 @@ class BlockChainUtils(object):
             "unspent_utxos": unspent_utxos,
             "balance": total_utxo_value
         }
-
 
     async def get_chain_spent_inputs(self, public_key, batch_size=100000):
         """
