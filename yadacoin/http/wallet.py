@@ -563,36 +563,41 @@ class ValidateAddressHandler(BaseHandler):
 
 class TransactionByIdHandler(BaseHandler):
     async def get(self):
-        txn_id = self.get_query_argument("id").replace(" ", "+")
+        txn_id = self.get_query_argument("id").replace(" ", "+")  # Poprawienie potencjalnych błędów w ID
+
+        # Pobranie transakcji z mempool
         best_mt_txn = await self.config.mongo.async_db.miner_transactions.find_one(
             {"id": txn_id}, {"_id": 0}, sort=[("time", -1)]
         )
+
+        # Pobranie transakcji z blockchainu
         result = await self.config.mongo.async_db.blocks.find_one(
-            {"transactions.id": txn_id}, {"_id": 0}, sort=[("transactions.time", -1)]
+            {"transactions.id": txn_id}, {"_id": 0, "transactions": 1}
         )
-        all_block_txn = []
-        if result:
-            for txn in result["transactions"]:
-                if txn["id"] == txn_id:
-                    all_block_txn.append(txn)
 
+        # Wyodrębnienie najlepszej transakcji z blockchainu
         best_block_txn = None
-        if all_block_txn:
-            best_block_txn = sorted(
-                all_block_txn, key=lambda x: int(x["time"]), reverse=True
-            )[0]
+        if result:
+            all_block_txn = [
+                txn for txn in result["transactions"] if txn["id"] == txn_id
+            ]
+            if all_block_txn:
+                best_block_txn = max(all_block_txn, key=lambda x: int(x["time"]))
 
-        if best_mt_txn and best_block_txn:
-            return self.render_as_json(
-                best_mt_txn
-                if int(best_mt_txn["time"]) >= int(best_block_txn["time"])
-                else best_block_txn
-            )
-        elif best_mt_txn or best_block_txn:
-            return self.render_as_json(best_mt_txn if best_mt_txn else best_block_txn)
-        else:
-            self.status_code = 404
-            return self.render_as_json({"status": False, "message": "user not found"})
+        # Dodanie odpowiednich statusów i zwrócenie wyników
+        if best_block_txn:
+            # Jeśli transakcja znajduje się w blockchainie
+            best_block_txn["status"] = "success"
+            return self.render_as_json(best_block_txn)
+
+        if best_mt_txn:
+            # Jeśli transakcja znajduje się w mempool
+            best_mt_txn["status"] = "mempool"
+            return self.render_as_json(best_mt_txn)
+
+        # Jeśli transakcja nie została znaleziona ani w mempool, ani w blockchain
+        self.status_code = 404
+        return self.render_as_json({"status": "failed", "message": "Transaction not found"})
 
 
 class ConvertPublicKeyToAddressHandler(BaseHandler):
