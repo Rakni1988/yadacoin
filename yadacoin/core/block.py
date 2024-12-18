@@ -1,10 +1,9 @@
-import asyncio
 import base64
 import binascii
 import hashlib
 import json
 import time
-from datetime import timedelta
+
 from decimal import Decimal, getcontext
 from logging import getLogger
 
@@ -12,15 +11,13 @@ import pyrx
 from bitcoin.signmessage import BitcoinMessage, VerifyMessage
 from bitcoin.wallet import P2PKHBitcoinAddress
 from coincurve.utils import verify_signature
-from tornado.iostream import StreamClosedError
-from tornado.tcpclient import TCPClient
-from tornado.util import TimeoutError
 
 import yadacoin.core.config
 from yadacoin.core.chain import CHAIN
 from yadacoin.core.config import Config
 from yadacoin.core.latestblock import LatestBlock
 from yadacoin.core.nodes import Nodes
+from yadacoin.core.nodestester import NodesTester
 from yadacoin.core.transaction import (
     InvalidTransactionException,
     Output,
@@ -38,40 +35,6 @@ def quantize_eight(value):
     value = Decimal(value)
     value = value.quantize(Decimal("0.00000000"))
     return value
-
-
-async def test_node(node, semaphore):
-    config = Config()
-    async with semaphore:
-        try:
-            stream = await TCPClient().connect(
-                node.host, node.port, timeout=timedelta(seconds=1)
-            )
-            return node
-        except StreamClosedError:
-            config.app_log.warning(
-                f"Stream closed exception in block generate: testing masternode {node.host}:{node.port}"
-            )
-        except TimeoutError:
-            config.app_log.warning(
-                f"Timeout exception in block generate: testing masternode {node.host}:{node.port}"
-            )
-        except Exception as e:
-            config.app_log.warning(
-                f"Unhandled exception in block generate: testing masternode {node.host}:{node.port}, error: {e}"
-            )
-        finally:
-            if "stream" in locals() and not stream.closed():
-                stream.close()
-
-
-async def test_all_nodes(nodes):
-    # Limit the number of concurrent tasks
-    semaphore = asyncio.Semaphore(50)  # Adjust the limit as needed
-    tasks = [test_node(node, semaphore) for node in nodes]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    successful_nodes = [node for node in results if node is not None]
-    return successful_nodes
 
 
 class CoinbaseRule1(Exception):
@@ -254,7 +217,14 @@ class Block(object):
         )
         block_reward = CHAIN.get_block_reward(index)
         if index >= CHAIN.PAY_MASTER_NODES_FORK:
-            nodes = Nodes.get_all_nodes_for_block_height(config.LatestBlock.block.index)
+            block_index = config.LatestBlock.block.index
+            current_nodes = Nodes.get_all_nodes_for_block_height(block_index)
+
+            if not NodesTester.all_nodes or NodesTester.all_nodes != current_nodes:
+                config.app_log.info("Node list has changed. Retesting all nodes...")
+                await NodesTester.test_all_nodes(block_index)
+                NodesTester.all_nodes = current_nodes
+
             outputs = [
                 Output.from_dict(
                     {
@@ -267,37 +237,32 @@ class Block(object):
             ]
             masternode_reward_total = block_reward * 0.1
 
-            successful_nodes = await test_all_nodes(nodes)
-            if successful_nodes:
-                if index >= CHAIN.CHECK_MASTERNODE_FEE_FORK:
-                    masternode_fee_sum = sum(
-                        [
-                            float(transaction_obj.masternode_fee)
-                            for transaction_obj in transaction_objs
-                        ]
+            if index >= CHAIN.CHECK_MASTERNODE_FEE_FORK:
+                masternode_fee_sum = sum(
+                    [
+                        float(transaction_obj.masternode_fee)
+                        for transaction_obj in transaction_objs
+                    ]
+                )
+                masternode_reward_divided = (
+                    masternode_reward_total + masternode_fee_sum
+                ) / len(NodesTester.successful_nodes)
+            else:
+                masternode_reward_divided = masternode_reward_total / len(NodesTester.successful_nodes)
+
+            for successful_node in NodesTester.successful_nodes:
+                outputs.append(
+                    Output.from_dict(
+                        {
+                            "value": float(masternode_reward_divided),
+                            "to": str(
+                                P2PKHBitcoinAddress.from_pubkey(
+                                    bytes.fromhex(successful_node.identity.public_key)
+                                )
+                            ),
+                        }
                     )
-                    masternode_reward_divided = (
-                        masternode_reward_total + masternode_fee_sum
-                    ) / len(successful_nodes)
-                else:
-                    masternode_reward_divided = masternode_reward_total / len(
-                        successful_nodes
-                    )
-                for successful_node in successful_nodes:
-                    outputs.append(
-                        Output.from_dict(
-                            {
-                                "value": float(masternode_reward_divided),
-                                "to": str(
-                                    P2PKHBitcoinAddress.from_pubkey(
-                                        bytes.fromhex(
-                                            successful_node.identity.public_key
-                                        )
-                                    )
-                                ),
-                            }
-                        )
-                    )
+                )
         else:
             outputs = [
                 Output.from_dict(
@@ -317,6 +282,9 @@ class Block(object):
             coinbase=True,
         )
         transaction_objs.append(coinbase_txn)
+
+        config.app_log.info("Generated Coinbase Transaction:")
+        config.app_log.info(coinbase_txn.to_json())
 
         block = await cls.init_async(
             version=version,

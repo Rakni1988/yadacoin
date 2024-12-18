@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Node Test Results</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f9f9f9;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #333;
+        }
+        .chart-container {
+            margin: 20px auto;
+            width: 90%;
+            height: 300px;
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+        }
+        canvas {
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Node Test Results</h1>
+    <div id="charts-container"></div>
+
+    <script>
+        async function fetchAndRenderCharts() {
+            const response = await fetch("/node-test-results");  // Endpoint
+            const { charts } = await response.json();
+
+            const container = document.getElementById("charts-container");
+
+            charts.forEach((chartData, index) => {
+                // Dynamiczny kontener na wykres
+                const chartId = `chart-${index}`;
+                const chartDiv = document.createElement("div");
+                chartDiv.className = "chart-container";
+
+                const canvas = document.createElement("canvas");
+                canvas.id = chartId;
+                chartDiv.appendChild(canvas);
+                container.appendChild(chartDiv);
+
+                // Przygotowanie danych
+                const labels = chartData.data.map(d => new Date(d.test_time * 1000).toLocaleString()); // Czas w formacie czytelnym
+                const success = chartData.data.map(d => d.successful_count);
+                const failed = chartData.data.map(d => d.failed_count);
+
+                // Tworzenie wykresu
+                new Chart(document.getElementById(chartId), {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: 'Successful Nodes',
+                                backgroundColor: 'rgba(0, 200, 0, 0.7)',
+                                borderColor: 'rgba(0, 150, 0, 1)',
+                                borderWidth: 1,
+                                data: success,
+                                stack: 'Stack 0'
+                            },
+                            {
+                                label: 'Failed Nodes',
+                                backgroundColor: 'rgba(255, 0, 0, 0.7)',
+                                borderColor: 'rgba(200, 0, 0, 1)',
+                                borderWidth: 1,
+                                data: failed,
+                                stack: 'Stack 0'
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: `Time Range: ${new Date(chartData.start_time * 1000).toLocaleString()} - ${new Date(chartData.end_time * 1000).toLocaleString()}`,
+                                font: { size: 16 }
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        const value = context.raw;
+                                        return `${context.dataset.label}: ${value}`;
+                                    },
+                                    title: function(context) {
+                                        return `Test Time: ${context[0].label}`;
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                stacked: true,
+                                title: {
+                                    display: true,
+                                    text: 'Test Time',
+                                    color: '#666',
+                                    font: { size: 14 }
+                                },
+                                ticks: { color: '#444' }
+                            },
+                            y: {
+                                stacked: true,
+                                title: {
+                                    display: true,
+                                    text: 'Node Count',
+                                    color: '#666',
+                                    font: { size: 14 }
+                                },
+                                ticks: { color: '#444' }
+                            }
+                        },
+                        layout: {
+                            padding: {
+                                left: 10,
+                                right: 10
+                            }
+                        }
+                    }
+                });
+            });
+        }
+
+        fetchAndRenderCharts();
+    </script>
+
+</body>
+</html>

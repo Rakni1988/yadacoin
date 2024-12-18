@@ -88,10 +88,48 @@ class PoolScanMissedPayoutsHandler(BaseHandler):
         await self.config.pp.do_payout({"index": int(start_index)})
         self.render_as_json({"status": True})
 
+class NodeTestResultsHandler(BaseHandler):
+    async def get(self):
+        """
+        Returns the last 120 node test results, grouped into charts of 40 results each.
+        """
+        MAX_RESULTS = 120
+        CHART_SIZE = 40
+
+        # Fetch the last 120 records, sorted by test_time in descending order
+        cursor = self.config.mongo.async_db.node_test_result.find(
+            {}, {"_id": 0}
+        ).sort([("test_time", -1)]).limit(MAX_RESULTS)
+
+        # Convert cursor to list of results
+        results = []
+        async for record in cursor:
+            results.append(record)
+
+        if not results:
+            self.render_as_json({"charts": []})
+            return
+
+        # Sort results ascending by test_time for better chart readability
+        results.sort(key=lambda x: x["test_time"])
+
+        # Split results into charts of 40 results each
+        charts_data = []
+        for i in range(0, len(results), CHART_SIZE):
+            chunk = results[i:i + CHART_SIZE]
+            charts_data.append({
+                "start_time": chunk[0]["test_time"],
+                "end_time": chunk[-1]["test_time"],
+                "data": chunk
+            })
+
+        # Return the grouped data as JSON
+        self.render_as_json({"charts": charts_data})
 
 POOL_HANDLERS = [
     (r"/shares-for-address", PoolSharesHandler),
     (r"/payouts-for-address", PoolPayoutsHandler),
     (r"/hashrate-for-address", PoolHashRateHandler),
     (r"/scan-missed-payouts", PoolScanMissedPayoutsHandler),
+    (r"/node-test-results", NodeTestResultsHandler),
 ]
