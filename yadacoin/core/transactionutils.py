@@ -155,22 +155,35 @@ class TU(object):  # Transaction Utilities
         )
 
         to_delete = []
+
+        # Check transactions with inputs already spent
         txns_to_clean = config.mongo.async_db.miner_transactions.find(
             {"time": {"$gte": config.last_mempool_clean}}
         )
         async for txn_to_clean in txns_to_clean:
             for x in txn_to_clean.get("inputs"):
+                config.app_log.info(
+                    f"Checking if input {x['id']} from public key {txn_to_clean['public_key']} is already spent"
+                )
                 if await config.BU.is_input_spent(x["id"], txn_to_clean["public_key"]):
+                    config.app_log.info(
+                        f"Input {x['id']} from public key {txn_to_clean['public_key']} is already spent. Marking transaction {txn_to_clean['id']} for deletion."
+                    )
                     to_delete.append(
                         {
                             "reason": "MempoolCleaner: Input already spent",
                             "txn": txn_to_clean,
                         }
                     )
-                    continue
+                    break  # No need to check further inputs for this transaction
+
+            # Check if the transaction is already in the blockchain
             if await config.mongo.async_db.blocks.find_one(
                 {"transactions.id": txn_to_clean["id"]}
             ):
+                config.app_log.info(
+                    f"Transaction {txn_to_clean['id']} is already in the blockchain. Marking for deletion."
+                )
                 to_delete.append(
                     {
                         "reason": "MempoolCleaner: Transaction already in blockchain",
@@ -185,11 +198,17 @@ class TU(object):  # Transaction Utilities
             }
         )
         async for txn_to_clean in txns_to_clean:
+            config.app_log.info(
+                f"Transaction {txn_to_clean['id']} expired. Marking for deletion."
+            )
             to_delete.append(
                 {"reason": "MempoolCleaner: Transaction expired", "txn": txn_to_clean}
             )
 
         for txn in to_delete:
+            config.app_log.info(
+                f"Deleting transaction {txn['txn']['id']} due to: {txn['reason']}"
+            )
             await config.mongo.async_db.failed_transactions.insert_one(txn)
             await config.mongo.async_db.miner_transactions.delete_many(
                 {"id": txn["txn"]["id"]}
