@@ -139,24 +139,36 @@ class NodeRPC(BaseRPC):
     async def newtxn(self, body, stream):
         payload = body.get("params", {})
         transaction = payload.get("transaction")
+        txn = None
+
         if transaction:
             txn = Transaction.from_dict(transaction)
-            if stream.peer.protocol_version > 2:
-                await self.write_result(
-                    stream, "newtxn_confirmed", body.get("params", {}), body["id"]
-                )
         elif payload.get("hash"):
             txn = Transaction.from_dict(payload)
-            if stream.peer.protocol_version > 2:
-                await self.write_result(
-                    stream,
-                    "newtxn_confirmed",
-                    {"transaction": body.get("params", {})},
-                    body["id"],
-                )
         else:
             self.config.app_log.info("newtxn, no payload")
             return
+
+        # Checking for duplicates in mempool based on (public_key, inputs.id)
+        for input_item in txn.inputs:
+            existing_txn = await self.config.mongo.async_db.miner_transactions.find_one(
+                {"public_key": txn.public_key, "inputs.id": input_item.id}
+            )
+            if existing_txn:
+                self.config.app_log.info(
+                    f"Duplicate transaction detected: {txn.transaction_signature} "
+                    f"for input.id: {input_item.id} and public_key: {txn.public_key}"
+                )
+                if stream.peer.protocol_version > 2:
+                    await self.write_result(
+                        stream, "newtxn_confirmed", body.get("params", {}), body["id"]
+                    )
+                return
+
+        if stream.peer.protocol_version > 2:
+            await self.write_result(
+                stream, "newtxn_confirmed", body.get("params", {}), body["id"]
+            )
 
         self.newtxn_tracker.by_host[stream.peer.host] = (
             self.newtxn_tracker.by_host.get(stream.peer.host, 0) + 1
