@@ -133,15 +133,31 @@ class BlockCheckerHealth(HealthItem):
 class MessageSenderHealth(HealthItem):
     async def check_health(self):
         if time.time() - self.last_activity > self.timeout:
+            self.config.app_log.warning("MessageSender health check failed. Cleaning up retry messages...")
+
+            self.cleanup_retry_messages()
+
             tornado.ioloop.IOLoop.current().spawn_callback(
                 self.config.application.background_message_sender
             )
+
             self.report_bad_health(
                 "Background message sender health check failed, restarting..."
             )
             return self.report_status(False)
 
         return self.report_status(True)
+
+    def cleanup_retry_messages(self):
+        for key, message in list(self.config.nodeServer.retry_messages.items()):
+            if message.get("retry_attempts", 0) > 3:
+                del self.config.nodeServer.retry_messages[key]
+                self.config.app_log.info(f"Removed stale message from nodeServer: {key}")
+
+        for key, message in list(self.config.nodeClient.retry_messages.items()):
+            if message.get("retry_attempts", 0) > 3:
+                del self.config.nodeClient.retry_messages[key]
+                self.config.app_log.info(f"Removed stale message from nodeClient: {key}")
 
 
 class BlockInserterHealth(HealthItem):
