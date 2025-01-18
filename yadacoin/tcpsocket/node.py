@@ -155,7 +155,8 @@ class NodeRPC(BaseRPC):
                 {"public_key": txn.public_key, "inputs.id": input_item.id}
             )
             if existing_txn:
-                self.config.app_log.info(
+                self.config.app_log.warning(f"Duplicate transaction detected!")
+                self.config.app_log.debug(
                     f"Duplicate transaction detected: {txn.transaction_signature} "
                     f"for input.id: {input_item.id} and public_key: {txn.public_key}"
                 )
