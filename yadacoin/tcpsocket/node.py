@@ -139,24 +139,52 @@ class NodeRPC(BaseRPC):
     async def newtxn(self, body, stream):
         payload = body.get("params", {})
         transaction = payload.get("transaction")
+        txn = None
+
         if transaction:
             txn = Transaction.from_dict(transaction)
+        elif payload.get("hash"):
+            txn = Transaction.from_dict(payload)
+        else:
+            self.config.app_log.info("newtxn, no payload")
+            return
+
+        # Check transaction timestamp
+        current_time = time.time()
+        txn_time = txn.time
+        time_diff = current_time - txn_time
+
+        if time_diff > 7200:  # 2 hours in seconds
+            self.config.app_log.warning(
+                f"Outdated transaction detected! Transaction: {txn.transaction_signature}, Time: {txn.time}"
+            )
             if stream.peer.protocol_version > 2:
                 await self.write_result(
                     stream, "newtxn_confirmed", body.get("params", {}), body["id"]
                 )
-        elif payload.get("hash"):
-            txn = Transaction.from_dict(payload)
-            if stream.peer.protocol_version > 2:
-                await self.write_result(
-                    stream,
-                    "newtxn_confirmed",
-                    {"transaction": body.get("params", {})},
-                    body["id"],
-                )
-        else:
-            self.config.app_log.info("newtxn, no payload")
             return
+
+        # Checking for duplicates in mempool based on (public_key, inputs.id)
+        for input_item in txn.inputs:
+            existing_txn = await self.config.mongo.async_db.miner_transactions.find_one(
+                {"public_key": txn.public_key, "inputs.id": input_item.id}
+            )
+            if existing_txn:
+                self.config.app_log.warning(f"Duplicate transaction detected!")
+                self.config.app_log.debug(
+                    f"Duplicate transaction detected: {txn.transaction_signature} "
+                    f"for input.id: {input_item.id} and public_key: {txn.public_key}"
+                )
+                if stream.peer.protocol_version > 2:
+                    await self.write_result(
+                        stream, "newtxn_confirmed", body.get("params", {}), body["id"]
+                    )
+                return
+
+        if stream.peer.protocol_version > 2:
+            await self.write_result(
+                stream, "newtxn_confirmed", body.get("params", {}), body["id"]
+            )
 
         self.newtxn_tracker.by_host[stream.peer.host] = (
             self.newtxn_tracker.by_host.get(stream.peer.host, 0) + 1
@@ -393,16 +421,50 @@ class NodeRPC(BaseRPC):
                 ] = payload
 
     async def send_block_to_peers(self, block):
+        self.config.app_log.info("Starting send_block_to_peers...")
         async for peer_stream in self.config.peer.get_sync_peers():
-            if (
-                hasattr(peer_stream.peer, "block")
-                and peer_stream.peer.block.index > block.index + 100
-            ):
-                continue
-            await self.send_block_to_peer(block, peer_stream)
+            try:
+                self.config.app_log.info(
+                    f"Processing peer: {getattr(peer_stream.peer, 'rid', 'Unknown')}, block index: {block.index}"
+                )
+                if (
+                    hasattr(peer_stream.peer, "block")
+                    and peer_stream.peer.block.index > block.index + 100
+                ):
+                    self.config.app_log.info(
+                        f"Skipping peer {getattr(peer_stream.peer, 'rid', 'Unknown')} due to block height mismatch."
+                    )
+                    continue
+
+                # Timeout for sending the block to the peer
+                await asyncio.wait_for(self.send_block_to_peer(block, peer_stream), timeout=10)
+
+            except asyncio.TimeoutError:
+                self.config.app_log.warning(
+                    f"Timeout while sending block to peer {getattr(peer_stream.peer, 'rid', 'Unknown')}."
+                )
+                await self.remove_peer(peer_stream, reason="Timeout during block sending")
+            except asyncio.CancelledError:
+                self.config.app_log.warning(
+                    f"CancelledError while sending block to peer {getattr(peer_stream.peer, 'rid', 'Unknown')}."
+                )
+                await self.remove_peer(peer_stream, reason="CancelledError during block sending")
+                break  # Break the loop to safely propagate cancellation
+            except Exception as e:
+                self.config.app_log.error(f"Error sending block to peer {getattr(peer_stream.peer, 'rid', 'Unknown')}: {e}")
+                await self.remove_peer(peer_stream, reason=f"Error: {e}")
+
+        self.config.app_log.info("Finished send_block_to_peers.")
 
     async def send_block_to_peer(self, block, peer_stream):
         payload = {"payload": {"block": block.to_dict()}}
+
+        if peer_stream.peer.rid not in self.config.nodeClient.outbound_streams[ServiceProvider.__name__]:
+            self.config.app_log.warning(
+                f"Peer {peer_stream.peer.rid} no longer exists. Skipping."
+            )
+            return
+
         await self.write_params(peer_stream, "newblock", payload)
         if peer_stream.peer.protocol_version > 1:
             self.retry_messages[
