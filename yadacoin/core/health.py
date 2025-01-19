@@ -125,6 +125,15 @@ class BlockCheckerHealth(HealthItem):
     async def check_health(self):
         if time.time() - self.last_activity > self.timeout:
             self.report_bad_health("Background block checker health check failed")
+
+            if hasattr(self.config, "background_block_checker"):
+                self.config.nodeShared.retry_messages = {}
+                self.config.app_log.info("Cleared NodeRPC.retry_messages during block checker reset.")
+
+                self.config.background_block_checker.busy = False
+                self.config.background_block_checker.last_send = 0
+                self.config.app_log.info("Resetting background_block_checker state.")
+
             return self.report_status(False)
 
         return self.report_status(True)
@@ -133,31 +142,23 @@ class BlockCheckerHealth(HealthItem):
 class MessageSenderHealth(HealthItem):
     async def check_health(self):
         if time.time() - self.last_activity > self.timeout:
-            self.config.app_log.warning("MessageSender health check failed. Cleaning up retry messages...")
+            self.config.app_log.warning("Resetting message sender due to timeout.")
 
-            self.cleanup_retry_messages()
+            self.config.nodeServer.retry_messages = {}
+            self.config.nodeClient.retry_messages = {}
+
+            if hasattr(self.config, "background_message_sender"):
+                self.config.background_message_sender.busy = False
 
             tornado.ioloop.IOLoop.current().spawn_callback(
                 self.config.application.background_message_sender
             )
-
             self.report_bad_health(
                 "Background message sender health check failed, restarting..."
             )
             return self.report_status(False)
 
         return self.report_status(True)
-
-    def cleanup_retry_messages(self):
-        for key, message in list(self.config.nodeServer.retry_messages.items()):
-            if message.get("retry_attempts", 0) > 3:
-                del self.config.nodeServer.retry_messages[key]
-                self.config.app_log.info(f"Removed stale message from nodeServer: {key}")
-
-        for key, message in list(self.config.nodeClient.retry_messages.items()):
-            if message.get("retry_attempts", 0) > 3:
-                del self.config.nodeClient.retry_messages[key]
-                self.config.app_log.info(f"Removed stale message from nodeClient: {key}")
 
 
 class BlockInserterHealth(HealthItem):
