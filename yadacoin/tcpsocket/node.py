@@ -1,8 +1,8 @@
 import base64
 import time
+from asyncio import Semaphore, gather
 from uuid import uuid4
 
-from asyncio import Semaphore, gather
 from coincurve import verify_signature
 from tornado.iostream import StreamClosedError
 
@@ -423,8 +423,10 @@ class NodeRPC(BaseRPC):
         async def send_with_semaphore(peer_stream):
             async with semaphore:
                 try:
-                    peer_id = getattr(peer_stream.peer, 'rid', 'Unknown')
-                    self.config.app_log.info(f"Processing peer: {peer_id}, block index: {block.index}")
+                    peer_id = getattr(peer_stream.peer, "rid", "Unknown")
+                    self.config.app_log.info(
+                        f"Processing peer: {peer_id}, block index: {block.index}"
+                    )
 
                     if (
                         hasattr(peer_stream.peer, "block")
@@ -443,17 +445,21 @@ class NodeRPC(BaseRPC):
                     self.config.app_log.warning(
                         f"Timeout while sending block to peer {peer_id}."
                     )
-                    self.delete_retry_messages(peer_id)
+                    await self.remove_peer(
+                        peer_stream, reason="Timeout during block sending"
+                    )
                 except asyncio.CancelledError:
                     self.config.app_log.warning(
                         f"CancelledError while sending block to peer {peer_id}."
                     )
-                    self.delete_retry_messages(peer_id)
+                    await self.remove_peer(
+                        peer_stream, reason="CancelledError during block sending"
+                    )
                 except Exception as e:
                     self.config.app_log.error(
                         f"Error sending block to peer {peer_id}: {e}"
                     )
-                    self.delete_retry_messages(peer_id)
+                    await self.remove_peer(peer_stream, reason=f"Error: {e}")
 
         async for peer_stream in self.config.peer.get_sync_peers():
             tasks.append(send_with_semaphore(peer_stream))
@@ -469,7 +475,9 @@ class NodeRPC(BaseRPC):
             if peer_stream.peer.protocol_version > 1:
                 self.retry_messages[(peer_id, "newblock", block.hash)] = payload
         except Exception as e:
-            self.config.app_log.error(f"Error in send_block_to_peer for peer {peer_id}: {e}")
+            self.config.app_log.error(
+                f"Error in send_block_to_peer for peer {peer_id}: {e}"
+            )
             raise
 
     async def get_next_block(self, block):

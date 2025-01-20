@@ -38,10 +38,24 @@ class BaseRPC:
         self.config = Config()
 
     async def write_result(self, stream, method, data, req_id):
-        await self.write_as_json(stream, method, data, "result", req_id)
+        try:
+            await self.write_as_json(stream, method, data, "result", req_id)
+        except Exception as e:
+            self.config.app_log.error(
+                f"Error in write_result: {e} for method {method}, stream {getattr(stream.peer, 'rid', 'Unknown')}"
+            )
+            if hasattr(stream, "peer"):
+                await self.remove_peer(stream, reason=f"write_result exception: {e}")
 
     async def write_params(self, stream, method, data):
-        await self.write_as_json(stream, method, data, "params")
+        try:
+            await self.write_as_json(stream, method, data, "params")
+        except Exception as e:
+            self.config.app_log.error(
+                f"Error in write_params: {e} for method {method}, stream {getattr(stream.peer, 'rid', 'Unknown')}"
+            )
+            if hasattr(stream, "peer"):
+                await self.remove_peer(stream, reason=f"write_params exception: {e}")
 
     async def write_as_json(self, stream, method, data, rpc_type, req_id=None):
         if isinstance(stream, DummyStream):
@@ -57,6 +71,7 @@ class BaseRPC:
             rpc_type: data,
         }
 
+        # Zarządzanie message_queue
         if rpc_type == "params":
             if method not in stream.message_queue:
                 stream.message_queue[method] = {}
@@ -67,29 +82,77 @@ class BaseRPC:
 
         try:
             await stream.write("{}\n".format(json.dumps(rpc_data)).encode())
+
         except asyncio.CancelledError:
             self.config.app_log.warning(
                 f"CancelledError while writing to stream: {getattr(stream.peer, 'rid', 'Unknown')}. Skipping."
             )
             raise
         except StreamClosedError:
+            peer_id = (
+                getattr(stream.peer, "rid", "Unknown")
+                if hasattr(stream, "peer")
+                else "Unknown"
+            )
             self.config.app_log.warning(
-                f"StreamClosedError while writing to stream: {getattr(stream.peer, 'rid', 'Unknown')}"
+                f"StreamClosedError while writing to stream: {peer_id}"
+            )
+
+            if hasattr(stream, "peer"):
+                try:
+                    await self.remove_peer(
+                        stream, reason="StreamClosedError during write_as_json"
+                    )
+                    self.config.app_log.info(
+                        f"Peer {peer_id} removed successfully after StreamClosedError."
+                    )
+                except Exception as e:
+                    self.config.app_log.error(
+                        f"Failed to remove peer {peer_id} after StreamClosedError: {e}"
+                    )
+            else:
+                self.config.app_log.warning(
+                    f"Stream does not have a 'peer' attribute. Skipping peer removal."
+                )
+        except ConnectionResetError:
+            self.config.app_log.warning(
+                f"ConnectionResetError while writing to stream: {getattr(stream.peer, 'rid', 'Unknown')}"
             )
             if hasattr(stream, "peer"):
                 try:
-                    await self.remove_peer(stream, reason="StreamClosedError during write_as_json")
+                    await self.remove_peer(
+                        stream, reason="ConnectionResetError during write_as_json"
+                    )
                 except Exception as e:
-                    self.config.app_log.error(f"Failed to remove peer after StreamClosedError: {e}")
+                    self.config.app_log.error(
+                        f"Failed to remove peer after ConnectionResetError: {e}"
+                    )
+        except TimeoutError:
+            self.config.app_log.warning(
+                f"TimeoutError while writing to stream: {getattr(stream.peer, 'rid', 'Unknown')}"
+            )
+            if hasattr(stream, "peer"):
+                try:
+                    await self.remove_peer(
+                        stream, reason="TimeoutError during write_as_json"
+                    )
+                except Exception as e:
+                    self.config.app_log.error(
+                        f"Failed to remove peer after TimeoutError: {e}"
+                    )
         except Exception as e:
             self.config.app_log.error(
                 f"Unhandled exception while writing to stream: {e}"
             )
             if hasattr(stream, "peer"):
                 try:
-                    await self.remove_peer(stream, reason=f"Exception during write_as_json: {e}")
+                    await self.remove_peer(
+                        stream, reason=f"Exception during write_as_json: {e}"
+                    )
                 except Exception as e:
-                    self.config.app_log.error(f"Failed to remove peer after exception: {e}")
+                    self.config.app_log.error(
+                        f"Failed to remove peer after exception: {e}"
+                    )
         finally:
             if (
                 hasattr(self.config, "tcp_traffic_debug")
@@ -102,9 +165,22 @@ class BaseRPC:
 
     async def remove_peer(self, stream, close=True, reason=None):
         try:
+            if not hasattr(stream, "peer"):
+                self.config.app_log.warning(
+                    f"Stream does not have a 'peer' attribute. Skipping removal."
+                )
+                return
+
+            id_attr = getattr(stream.peer, stream.peer.id_attribute, None)
+            if not id_attr:
+                self.config.app_log.warning(
+                    f"Stream peer does not have a valid ID attribute. Skipping removal."
+                )
+                return
+
             if stream.closed():
                 self.config.app_log.warning(
-                    f"Attempted to remove an already closed stream for peer: {getattr(stream.peer, 'rid', 'Unknown')}"
+                    f"Attempted to remove an already closed stream for peer: {id_attr}"
                 )
                 return
 
@@ -113,49 +189,55 @@ class BaseRPC:
                     await self.write_params(stream, "disconnect", {"reason": reason})
                 except Exception as e:
                     self.config.app_log.error(
-                        f"Failed to send 'disconnect' message to peer {getattr(stream.peer, 'rid', 'Unknown')}: {e}"
+                        f"Failed to send 'disconnect' message to peer {id_attr}: {e}"
                     )
 
             if close:
                 stream.close()
 
-            if not hasattr(stream, "peer"):
-                return
-
-            id_attr = getattr(stream.peer, stream.peer.id_attribute)
+            if (
+                id_attr
+                in self.config.nodeServer.inbound_streams[
+                    stream.peer.__class__.__name__
+                ]
+            ):
+                del self.config.nodeServer.inbound_streams[
+                    stream.peer.__class__.__name__
+                ][id_attr]
 
             if (
                 id_attr
-                in self.config.nodeServer.inbound_streams[stream.peer.__class__.__name__]
-            ):
-                del self.config.nodeServer.inbound_streams[stream.peer.__class__.__name__][
-                    id_attr
+                in self.config.nodeServer.inbound_pending[
+                    stream.peer.__class__.__name__
                 ]
+            ):
+                del self.config.nodeServer.inbound_pending[
+                    stream.peer.__class__.__name__
+                ][id_attr]
 
             if (
                 id_attr
-                in self.config.nodeServer.inbound_pending[stream.peer.__class__.__name__]
-            ):
-                del self.config.nodeServer.inbound_pending[stream.peer.__class__.__name__][
-                    id_attr
+                in self.config.nodeClient.outbound_streams[
+                    stream.peer.__class__.__name__
                 ]
+            ):
+                del self.config.nodeClient.outbound_streams[
+                    stream.peer.__class__.__name__
+                ][id_attr]
 
             if (
                 id_attr
-                in self.config.nodeClient.outbound_streams[stream.peer.__class__.__name__]
-            ):
-                del self.config.nodeClient.outbound_streams[stream.peer.__class__.__name__][
-                    id_attr
+                in self.config.nodeClient.outbound_pending[
+                    stream.peer.__class__.__name__
                 ]
-
-            if (
-                id_attr
-                in self.config.nodeClient.outbound_pending[stream.peer.__class__.__name__]
             ):
-                del self.config.nodeClient.outbound_pending[stream.peer.__class__.__name__][
-                    id_attr
-                ]
+                del self.config.nodeClient.outbound_pending[
+                    stream.peer.__class__.__name__
+                ][id_attr]
 
+            self.delete_retry_messages(id_attr)
+
+            self.config.app_log.info(f"Peer {peer_id} removed successfully.")
         except Exception as e:
             self.config.app_log.error(f"Unhandled exception while removing peer: {e}")
 
@@ -180,7 +262,9 @@ class BaseRPC:
             )
 
         except Exception as e:
-            self.config.app_log.error(f"Error deleting retry_messages for peer {rid}: {e}")
+            self.config.app_log.error(
+                f"Error deleting retry_messages for peer {rid}: {e}"
+            )
 
 
 class RPCSocketServer(TCPServer, BaseRPC):
