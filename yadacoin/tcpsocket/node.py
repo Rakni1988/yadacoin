@@ -443,17 +443,17 @@ class NodeRPC(BaseRPC):
                     self.config.app_log.warning(
                         f"Timeout while sending block to peer {peer_id}."
                     )
-                    self.delete_retry_messages(peer_id)
+                    await self.remove_peer(peer_stream, reason="Timeout during block sending")
                 except asyncio.CancelledError:
                     self.config.app_log.warning(
                         f"CancelledError while sending block to peer {peer_id}."
                     )
-                    self.delete_retry_messages(peer_id)
+                    await self.remove_peer(peer_stream, reason="CancelledError during block sending")
                 except Exception as e:
                     self.config.app_log.error(
                         f"Error sending block to peer {peer_id}: {e}"
                     )
-                    self.delete_retry_messages(peer_id)
+                    await self.remove_peer(peer_stream, reason=f"Error: {e}")
 
         async for peer_stream in self.config.peer.get_sync_peers():
             tasks.append(send_with_semaphore(peer_stream))

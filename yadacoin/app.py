@@ -272,9 +272,8 @@ class NodeApplication(Application):
                     del self.config.nodeClient.retry_messages[key]
                     removed_from_node_client += 1
 
-            # Usuń wpisy z retry_counters
             for key in list(self.retry_counters.keys()):
-                if key[0] == rid:  # Jeśli peer_id pasuje, usuń klucz z retry_counters
+                if key[0] == rid:
                     del self.retry_counters[key]
 
             self.config.app_log.info(
