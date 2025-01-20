@@ -2,6 +2,7 @@
 Async Yadacoin node poc
 """
 
+import asyncio
 import importlib
 import json
 import logging
@@ -136,6 +137,7 @@ class NodeApplication(Application):
         self.init_config(options)
         self.configure_logging()
         self.init_config_properties(test=test)
+        self.config.lock = asyncio.Lock()
         if test:
             return
         if MODES.NODE.value in self.config.modes:
@@ -190,68 +192,99 @@ class NodeApplication(Application):
         self.init_ioloop()
 
     async def remove_peer(self, stream, reason=None):
-        if reason:
-            await self.config.nodeShared.write_params(
-                stream, "disconnect", {"reason": reason}
-            )
-        stream.close()
-        if not hasattr(stream, "peer"):
-            return
-        id_attr = getattr(stream.peer, stream.peer.id_attribute)
-        if (
-            id_attr
-            in self.config.nodeServer.inbound_streams[stream.peer.__class__.__name__]
-        ):
-            del self.config.nodeServer.inbound_streams[stream.peer.__class__.__name__][
-                id_attr
-            ]
 
-        if (
-            id_attr
-            in self.config.nodeServer.inbound_pending[stream.peer.__class__.__name__]
-        ):
-            del self.config.nodeServer.inbound_pending[stream.peer.__class__.__name__][
-                id_attr
-            ]
+        try:
+            if reason:
+                try:
+                    await asyncio.wait_for(
+                        self.config.nodeShared.write_params(
+                            stream, "disconnect", {"reason": reason}
+                        ),
+                        timeout=3
+                    )
+                except (asyncio.TimeoutError, Exception) as e:
+                    self.config.app_log.warning(
+                        f"Failed to send disconnect to peer {getattr(stream.peer, 'rid', 'Unknown')}: {e}"
+                    )
 
-        if (
-            id_attr
-            in self.config.nodeClient.outbound_streams[stream.peer.__class__.__name__]
-        ):
-            del self.config.nodeClient.outbound_streams[stream.peer.__class__.__name__][
-                id_attr
-            ]
-            self.config.nodeClient.outbound_ignore[stream.peer.__class__.__name__][
-                stream.peer.identity.username_signature
-            ] = int(time())
+            stream.close()
 
-        if (
-            id_attr
-            in self.config.nodeClient.outbound_pending[stream.peer.__class__.__name__]
-        ):
-            del self.config.nodeClient.outbound_pending[stream.peer.__class__.__name__][
-                id_attr
-            ]
-            self.config.nodeClient.outbound_ignore[stream.peer.__class__.__name__][
-                stream.peer.identity.username_signature
-            ] = int(time())
+            if not hasattr(stream, "peer"):
+                return
 
-        self.delete_retry_messages(id_attr)
+            id_attr = getattr(stream.peer, stream.peer.id_attribute)
+
+            if (
+                id_attr
+                in self.config.nodeServer.inbound_streams[stream.peer.__class__.__name__]
+            ):
+                del self.config.nodeServer.inbound_streams[stream.peer.__class__.__name__][
+                    id_attr
+                ]
+
+            if (
+                id_attr
+                in self.config.nodeServer.inbound_pending[stream.peer.__class__.__name__]
+            ):
+                del self.config.nodeServer.inbound_pending[stream.peer.__class__.__name__][
+                    id_attr
+                ]
+
+            if (
+                id_attr
+                in self.config.nodeClient.outbound_streams[stream.peer.__class__.__name__]
+            ):
+                del self.config.nodeClient.outbound_streams[stream.peer.__class__.__name__][
+                    id_attr
+                ]
+                self.config.nodeClient.outbound_ignore[stream.peer.__class__.__name__][
+                    stream.peer.identity.username_signature
+                ] = int(time())
+
+            if (
+                id_attr
+                in self.config.nodeClient.outbound_pending[stream.peer.__class__.__name__]
+            ):
+                del self.config.nodeClient.outbound_pending[stream.peer.__class__.__name__][
+                    id_attr
+                ]
+                self.config.nodeClient.outbound_ignore[stream.peer.__class__.__name__][
+                    stream.peer.identity.username_signature
+                ] = int(time())
+
+            self.config.app_log.info(f"Peer {id_attr} removed successfully.")
+
+        except Exception as e:
+            self.config.app_log.error(f"Error while removing peer: {e}")
 
     def delete_retry_messages(self, rid):
         try:
-            for y in self.config.nodeServer.retry_messages.copy():
-                if y[0] == rid:
-                    del self.config.nodeServer.retry_messages[y]
-        except:
-            pass
+            removed_from_node_server = 0
+            removed_from_node_client = 0
 
-        try:
-            for y in self.config.nodeClient.retry_messages.copy():
-                if y[0] == rid:
-                    del self.config.nodeClient.retry_messages[y]
-        except:
-            pass
+            for key in list(self.config.nodeServer.retry_messages.keys()):
+                if key[0] == rid:
+                    del self.config.nodeServer.retry_messages[key]
+                    removed_from_node_server += 1
+
+            for key in list(self.config.nodeClient.retry_messages.keys()):
+                if key[0] == rid:
+                    del self.config.nodeClient.retry_messages[key]
+                    removed_from_node_client += 1
+
+            # Usuń wpisy z retry_counters
+            for key in list(self.retry_counters.keys()):
+                if key[0] == rid:  # Jeśli peer_id pasuje, usuń klucz z retry_counters
+                    del self.retry_counters[key]
+
+            self.config.app_log.info(
+                f"Deleted {removed_from_node_server} messages from nodeServer.retry_messages and "
+                f"{removed_from_node_client} from nodeClient.retry_messages for peer ID: {rid}. "
+                f"Also removed {rid} from retry_counters."
+            )
+
+        except Exception as e:
+            self.config.app_log.error(f"Error deleting retry_messages for peer {rid}: {e}")
 
     async def background_peers(self):
         """Peers management coroutine. responsible for peers testing and outgoing connections"""
@@ -376,52 +409,62 @@ class NodeApplication(Application):
         self.config.background_status.busy = False
 
     async def background_block_checker(self):
-        """Responsible for miner updates"""
-        """
-        New blocks will directly trigger the correct event.
-        This co-routine checks if new transactions have been received, or if special_min is triggered,
-        So we can update the miners.
-        """
+        """Responsible for miner updates and block propagation."""
         self.config.app_log.debug("background_block_checker")
         if not hasattr(self.config, "background_block_checker"):
-            self.config.background_block_checker = WorkerVars(busy=False, last_send=0)
+            self.config.background_block_checker = WorkerVars(
+                busy=False, last_send=0, last_block_height=0, last_block_hash=None
+            )
         if self.config.background_block_checker.busy:
             self.config.app_log.debug("background_block_checker - busy")
             return
         self.config.background_block_checker.busy = True
-        try:
-            self.config.background_block_checker.last_block_height = 0
-            if LatestBlock.block:
-                self.config.background_block_checker.last_block_height = (
-                    LatestBlock.block.index
-                )
-            await LatestBlock.block_checker()
-            if (
-                self.config.background_block_checker.last_block_height
-                != LatestBlock.block.index
-            ):
-                self.config.app_log.info(
-                    "Latest block height: %s | time: %s"
-                    % (
-                        self.config.LatestBlock.block.index,
-                        datetime.fromtimestamp(
-                            int(self.config.LatestBlock.block.time)
-                        ).strftime("%Y-%m-%d %H:%M:%S"),
-                    )
-                )
-                await self.config.nodeShared.send_block_to_peers(
-                    self.config.LatestBlock.block
-                )
-            elif int(time()) - self.config.background_block_checker.last_send > 60:
-                self.config.background_block_checker.last_send = int(time())
-                await self.config.nodeShared.send_block_to_peers(
-                    self.config.LatestBlock.block
-                )
 
-            self.config.health.block_checker.last_activity = int(time())
-        except Exception:
-            self.config.app_log.error(format_exc())
-        self.config.background_block_checker.busy = False
+        async with self.config.lock:
+            try:
+                current_block = LatestBlock.block
+                last_block_height = self.config.background_block_checker.last_block_height
+                last_block_hash = self.config.background_block_checker.last_block_hash
+
+                if current_block:
+                    self.config.app_log.debug(
+                        f"Current block: Height={current_block.index}, Hash={current_block.hash}"
+                    )
+
+                    # Check if the block height or hash has changed
+                    if current_block.index != last_block_height or current_block.hash != last_block_hash:
+                        self.config.background_block_checker.last_block_height = current_block.index
+                        self.config.background_block_checker.last_block_hash = current_block.hash
+
+                        self.config.app_log.info(
+                            f"New block detected: Height={current_block.index}, "
+                            f"Hash={current_block.hash}, Time={datetime.fromtimestamp(current_block.time).strftime('%Y-%m-%d %H:%M:%S')}"
+                        )
+
+                        # Propagate the new block to peers
+                        await self.config.nodeShared.send_block_to_peers(current_block)
+                        self.config.background_block_checker.last_send = int(time())
+                        self.config.app_log.info(
+                            f"Block {current_block.index} successfully propagated to peers."
+                        )
+                    elif int(time()) - self.config.background_block_checker.last_send > 300:
+                        # Regular propagation if no new block but timeout exceeded
+                        self.config.app_log.info("Regular propagation triggered after timeout.")
+                        self.config.background_block_checker.last_send = int(time())
+                        await self.config.nodeShared.send_block_to_peers(current_block)
+                    else:
+                        self.config.app_log.debug(
+                            f"No propagation needed. Last send: {self.config.background_block_checker.last_send}, "
+                            f"Time since last send: {int(time()) - self.config.background_block_checker.last_send}s"
+                        )
+                else:
+                    self.config.app_log.debug("No current block available to propagate.")
+
+            except Exception:
+                self.config.app_log.error(format_exc())
+            finally:
+                self.config.health.block_checker.last_activity = int(time())
+                self.config.background_block_checker.busy = False
 
     async def background_newtxn_stress_test(self):
         for peer_cls in list(self.config.nodeClient.outbound_streams.keys()).copy():
@@ -473,107 +516,104 @@ class NodeApplication(Application):
 
     async def background_message_sender(self):
         self.config.app_log.debug("background_message_sender")
+
+        if not hasattr(self, "retry_counters"):
+            self.retry_counters = {}
+
         if not hasattr(self.config, "background_message_sender"):
             self.config.background_message_sender = WorkerVars(busy=False)
+
         if self.config.background_message_sender.busy:
             self.config.app_log.debug("background_message_sender - busy")
             return
+
         self.config.background_message_sender.busy = True
+
         try:
-            for x in self.config.nodeServer.retry_messages.copy():
-                message = self.config.nodeServer.retry_messages.get(x)
-                if not message:
-                    if x in self.config.nodeServer.retry_messages:
-                        del self.config.nodeServer.retry_messages[x]
-                    self.config.app_log.debug("background_message_sender - continue 1")
-                    continue
-                message.setdefault("retry_attempts", 0)
-                message["retry_attempts"] += 1
-                for peer_cls in list(
-                    self.config.nodeServer.inbound_streams.keys()
-                ).copy():
-                    found = False
-                    if x[0] in self.config.nodeServer.inbound_streams[peer_cls]:
-                        found = True
-                        if message["retry_attempts"] > 3:
-                            await self.remove_peer(
-                                self.config.nodeServer.inbound_streams[peer_cls][x[0]],
-                                reason=f"background_message_sender nodeServer {x}",
-                            )
-                            self.config.app_log.warning(
-                                f"peer removed: background_message_sender nodeServer {x}"
-                            )
-                            self.config.app_log.debug(
-                                "background_message_sender - continue 2"
-                            )
+            async with self.config.lock:
+                async def process_retry_messages(retry_messages, stream_dict, stream_type):
+                    for x in list(retry_messages.keys()):
+                        message = retry_messages.get(x)
+                        if not message:
+                            retry_messages.pop(x, None)
+                            self.config.app_log.debug(f"{stream_type} - Removed empty retry message {x}.")
                             continue
-                        if len(x) > 3:
-                            await self.config.nodeShared.write_result(
-                                self.config.nodeServer.inbound_streams[peer_cls][x[0]],
-                                x[1],
-                                message,
-                                x[3],
-                            )
-                        else:
-                            await self.config.nodeShared.write_params(
-                                self.config.nodeServer.inbound_streams[peer_cls][x[0]],
-                                x[1],
-                                message,
-                            )
-                    if not found:
-                        self.delete_retry_messages(
-                            x[0],
+
+                        key = (x[0], x[1])
+                        if key not in self.retry_counters:
+                            self.retry_counters[key] = 0
+
+                        self.retry_counters[key] += 1
+                        self.config.app_log.info(
+                            f"Retrying message {key} for {stream_type}, attempt {self.retry_counters[key]}."
                         )
 
-            for x in self.config.nodeClient.retry_messages.copy():
-                message = self.config.nodeClient.retry_messages.get(x)
-                if not message:
-                    if x in self.config.nodeClient.retry_messages:
-                        del self.config.nodeClient.retry_messages[x]
-                    self.config.app_log.debug("background_message_sender - continue 3")
-                    continue
-                message.setdefault("retry_attempts", 0)
-                message["retry_attempts"] += 1
-                for peer_cls in list(
-                    self.config.nodeClient.outbound_streams.keys()
-                ).copy():
-                    found = False
-                    if x[0] in self.config.nodeClient.outbound_streams[peer_cls]:
-                        found = True
-                        if message["retry_attempts"] > 3:
-                            await self.remove_peer(
-                                self.config.nodeClient.outbound_streams[peer_cls][x[0]],
-                                reason=f"background_message_sender nodeClient {x}",
-                            )
+                        if self.retry_counters[key] > 3:
+                            self.delete_retry_messages(x[0])
                             self.config.app_log.warning(
-                                f"peer removed: background_message_sender nodeClient {x}"
+                                f"Message {key} exceeded retry limit. Removed from retry_messages."
                             )
-                            continue
-                        if message.get("test"):
-                            continue
-                        if len(x) > 3:
-                            await self.config.nodeShared.write_result(
-                                self.config.nodeClient.outbound_streams[peer_cls][x[0]],
-                                x[1],
-                                message,
-                                x[3],
-                            )
-                        else:
-                            await self.config.nodeShared.write_params(
-                                self.config.nodeClient.outbound_streams[peer_cls][x[0]],
-                                x[1],
-                                message,
-                            )
-                    if not found:
-                        self.delete_retry_messages(
-                            x[0],
-                        )
 
-            self.config.health.message_sender.last_activity = int(time())
+                            try:
+                                for peer_cls in list(self.config.nodeServer.inbound_streams.keys()).copy():
+                                    if x[0] in self.config.nodeServer.inbound_streams[peer_cls]:
+                                        await self.remove_peer(
+                                            self.config.nodeServer.inbound_streams[peer_cls][x[0]],
+                                            reason="Exceeded retry limit"
+                                        )
+                                        break
+
+                                for peer_cls in list(self.config.nodeClient.outbound_streams.keys()).copy():
+                                    if x[0] in self.config.nodeClient.outbound_streams[peer_cls]:
+                                        await self.remove_peer(
+                                            self.config.nodeClient.outbound_streams[peer_cls][x[0]],
+                                            reason="Exceeded retry limit"
+                                        )
+                                        break
+
+                            except Exception as e:
+                                self.config.app_log.error(f"Failed to remove peer {x[0]}: {e}")
+
+                            continue
+
+                        for peer_cls in list(stream_dict.keys()).copy():
+                            if x[0] in stream_dict[peer_cls]:
+                                peer_stream = stream_dict[peer_cls][x[0]]
+                                try:
+                                    if len(x) > 3:
+                                        await self.config.nodeShared.write_result(
+                                            peer_stream,
+                                            x[1],
+                                            message,
+                                            x[3],
+                                        )
+                                    else:
+                                        await self.config.nodeShared.write_params(
+                                            peer_stream,
+                                            x[1],
+                                            message,
+                                        )
+                                except Exception as e:
+                                    self.config.app_log.error(f"Error writing to peer {x[0]}: {e}")
+
+                await process_retry_messages(
+                    self.config.nodeServer.retry_messages,
+                    self.config.nodeServer.inbound_streams,
+                    "nodeServer"
+                )
+                await process_retry_messages(
+                    self.config.nodeClient.retry_messages,
+                    self.config.nodeClient.outbound_streams,
+                    "nodeClient"
+                )
+
+                self.config.health.message_sender.last_activity = int(time())
 
         except Exception:
             self.config.app_log.error(format_exc())
-        self.config.background_message_sender.busy = False
+
+        finally:
+            self.config.background_message_sender.busy = False
 
     async def background_txn_queue_processor(self):
         self.config.app_log.debug("background_txn_queue_processor")
@@ -804,7 +844,7 @@ class NodeApplication(Application):
     async def background_nonce_processor(self):
         """Responsible for processing all share submissions from miners"""
 
-        #self.config.app_log.debug("background_nonce_processor")
+        self.config.app_log.debug("background_nonce_processor")
         if not hasattr(self.config, "background_nonce_processor"):
             self.config.background_nonce_processor = WorkerVars(busy=False)
         if self.config.background_nonce_processor.busy:

@@ -2,6 +2,7 @@ import base64
 import time
 from uuid import uuid4
 
+from asyncio import Semaphore, gather
 from coincurve import verify_signature
 from tornado.iostream import StreamClosedError
 
@@ -155,9 +156,7 @@ class NodeRPC(BaseRPC):
         time_diff = current_time - txn_time
 
         if time_diff > 7200:  # 2 hours in seconds
-            self.config.app_log.warning(
-                f"Outdated transaction detected! Transaction: {txn.transaction_signature}, Time: {txn.time}"
-            )
+            self.config.app_log.warning(f"Outdated transaction detected!")
             if stream.peer.protocol_version > 2:
                 await self.write_result(
                     stream, "newtxn_confirmed", body.get("params", {}), body["id"]
@@ -171,10 +170,6 @@ class NodeRPC(BaseRPC):
             )
             if existing_txn:
                 self.config.app_log.warning(f"Duplicate transaction detected!")
-                self.config.app_log.debug(
-                    f"Duplicate transaction detected: {txn.transaction_signature} "
-                    f"for input.id: {input_item.id} and public_key: {txn.public_key}"
-                )
                 if stream.peer.protocol_version > 2:
                     await self.write_result(
                         stream, "newtxn_confirmed", body.get("params", {}), body["id"]
@@ -420,56 +415,62 @@ class NodeRPC(BaseRPC):
                     (peer_stream.peer.rid, "newtxn", txn.transaction_signature)
                 ] = payload
 
-    async def send_block_to_peers(self, block):
+    async def send_block_to_peers(self, block, max_concurrent=20):
         self.config.app_log.info("Starting send_block_to_peers...")
-        async for peer_stream in self.config.peer.get_sync_peers():
-            try:
-                self.config.app_log.info(
-                    f"Processing peer: {getattr(peer_stream.peer, 'rid', 'Unknown')}, block index: {block.index}"
-                )
-                if (
-                    hasattr(peer_stream.peer, "block")
-                    and peer_stream.peer.block.index > block.index + 100
-                ):
-                    self.config.app_log.info(
-                        f"Skipping peer {getattr(peer_stream.peer, 'rid', 'Unknown')} due to block height mismatch."
+        semaphore = Semaphore(max_concurrent)
+        tasks = []
+
+        async def send_with_semaphore(peer_stream):
+            async with semaphore:
+                try:
+                    peer_id = getattr(peer_stream.peer, 'rid', 'Unknown')
+                    self.config.app_log.info(f"Processing peer: {peer_id}, block index: {block.index}")
+
+                    if (
+                        hasattr(peer_stream.peer, "block")
+                        and peer_stream.peer.block.index > block.index + 100
+                    ):
+                        self.config.app_log.info(
+                            f"Skipping peer {peer_id} due to block height mismatch."
+                        )
+                        return
+
+                    await asyncio.wait_for(
+                        self.send_block_to_peer(block, peer_stream), timeout=10
                     )
-                    continue
 
-                # Timeout for sending the block to the peer
-                await asyncio.wait_for(self.send_block_to_peer(block, peer_stream), timeout=10)
+                except asyncio.TimeoutError:
+                    self.config.app_log.warning(
+                        f"Timeout while sending block to peer {peer_id}."
+                    )
+                    self.delete_retry_messages(peer_id)
+                except asyncio.CancelledError:
+                    self.config.app_log.warning(
+                        f"CancelledError while sending block to peer {peer_id}."
+                    )
+                    self.delete_retry_messages(peer_id)
+                except Exception as e:
+                    self.config.app_log.error(
+                        f"Error sending block to peer {peer_id}: {e}"
+                    )
+                    self.delete_retry_messages(peer_id)
 
-            except asyncio.TimeoutError:
-                self.config.app_log.warning(
-                    f"Timeout while sending block to peer {getattr(peer_stream.peer, 'rid', 'Unknown')}."
-                )
-                await self.remove_peer(peer_stream, reason="Timeout during block sending")
-            except asyncio.CancelledError:
-                self.config.app_log.warning(
-                    f"CancelledError while sending block to peer {getattr(peer_stream.peer, 'rid', 'Unknown')}."
-                )
-                await self.remove_peer(peer_stream, reason="CancelledError during block sending")
-                break  # Break the loop to safely propagate cancellation
-            except Exception as e:
-                self.config.app_log.error(f"Error sending block to peer {getattr(peer_stream.peer, 'rid', 'Unknown')}: {e}")
-                await self.remove_peer(peer_stream, reason=f"Error: {e}")
+        async for peer_stream in self.config.peer.get_sync_peers():
+            tasks.append(send_with_semaphore(peer_stream))
 
+        await gather(*tasks, return_exceptions=True)
         self.config.app_log.info("Finished send_block_to_peers.")
 
     async def send_block_to_peer(self, block, peer_stream):
         payload = {"payload": {"block": block.to_dict()}}
-
-        if peer_stream.peer.rid not in self.config.nodeClient.outbound_streams[ServiceProvider.__name__]:
-            self.config.app_log.warning(
-                f"Peer {peer_stream.peer.rid} no longer exists. Skipping."
-            )
-            return
-
-        await self.write_params(peer_stream, "newblock", payload)
-        if peer_stream.peer.protocol_version > 1:
-            self.retry_messages[
-                (peer_stream.peer.rid, "newblock", block.hash)
-            ] = payload
+        peer_id = getattr(peer_stream.peer, "rid", "Unknown")
+        try:
+            await self.write_params(peer_stream, "newblock", payload)
+            if peer_stream.peer.protocol_version > 1:
+                self.retry_messages[(peer_id, "newblock", block.hash)] = payload
+        except Exception as e:
+            self.config.app_log.error(f"Error in send_block_to_peer for peer {peer_id}: {e}")
+            raise
 
     async def get_next_block(self, block):
         async for peer_stream in self.config.peer.get_sync_peers():
