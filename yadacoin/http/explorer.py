@@ -13,34 +13,67 @@ from yadacoin.http.base import BaseHandler
 
 class HashrateAPIHandler(BaseHandler):
     async def refresh(self):
-        from yadacoin.core.block import Block
+        """Refreshes network stats like hash rate and difficulty."""
+        max_target = 0x0000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
 
-        blocks = [
-            await Block.from_dict(x)
-            async for x in self.config.mongo.async_db.blocks.find({})
-            .sort([("index", -1)])
-            .limit(48)
-        ]
-        difficulty = int(CHAIN.MAX_TARGET / blocks[0].target)
+        stats = await self.get_network_stats(max_target)
 
-        hash_rate = self.config.BU.get_hash_rate(blocks)
+        latest_block = await self.config.mongo.async_db.blocks.find_one(sort=[("index", -1)])
+        if not latest_block:
+            raise Exception("No blocks found in database.")
+
+        latest_block_difficulty = max_target / int(latest_block["target"], 16)
+
         self.config.HashRateAPIHandler = {
             "cache": {
                 "time": time.time(),
-                "circulating": CHAIN.get_circulating_supply(blocks[0].index),
-                "height": blocks[0].index,
-                "network_hash_rate": hash_rate,
-                "difficulty": difficulty,
+                "circulating": CHAIN.get_circulating_supply(latest_block["index"]),
+                "height": latest_block["index"],
+                "block_time": latest_block["updated_at"],
+                "block_hash": latest_block["hash"],
+                "network_hash_rate": stats["hash_rate"],
+                "difficulty": latest_block_difficulty,
+                "avg_difficulty": stats["avg_difficulty"],
             }
         }
 
+    async def get_network_stats(self, max_target):
+        """Calculates network stats like average target, difficulty, and hash rate."""
+        num_blocks = 24
+        scale_factor = 2**16
+
+        cursor = self.config.mongo.async_db.blocks.find(
+            {}, {"index": 1, "time": 1, "target": 1}
+        ).sort([("index", -1)]).limit(num_blocks)
+        
+        blocks = []
+        async for block in cursor:
+            blocks.append({
+                "index": block["index"],
+                "time": block["time"],
+                "target": int(block["target"], 16)
+            })
+
+        if len(blocks) < 2:
+            return {"difficulty": 0, "hash_rate": 0}
+
+        avg_target = sum(block["target"] for block in blocks) / len(blocks)
+        avg_difficulty = max_target / avg_target
+        avg_block_time = (blocks[0]["time"] - blocks[-1]["time"]) / (len(blocks) -1)
+        hash_rate = avg_difficulty * scale_factor / avg_block_time
+
+        return {
+            "avg_difficulty": avg_difficulty,
+            "hash_rate": hash_rate
+        }
+
     async def get(self):
-        self.config
         if not hasattr(self.config, "HashRateAPIHandler"):
             await self.refresh()
-        elif time.time() - self.config.HashRateAPIHandler["cache"]["time"] > 600:
+        elif time.time() - self.config.HashRateAPIHandler["cache"]["time"] > 60:
             await self.refresh()
         self.render_as_json({"stats": self.config.HashRateAPIHandler["cache"]})
+
 
 
 class ExplorerHandler(BaseHandler):

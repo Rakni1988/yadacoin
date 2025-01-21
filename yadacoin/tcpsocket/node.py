@@ -1,5 +1,6 @@
 import base64
 import time
+from asyncio import Semaphore, gather
 from uuid import uuid4
 
 from coincurve import verify_signature
@@ -139,24 +140,46 @@ class NodeRPC(BaseRPC):
     async def newtxn(self, body, stream):
         payload = body.get("params", {})
         transaction = payload.get("transaction")
+        txn = None
+
         if transaction:
             txn = Transaction.from_dict(transaction)
+        elif payload.get("hash"):
+            txn = Transaction.from_dict(payload)
+        else:
+            self.config.app_log.info("newtxn, no payload")
+            return
+
+        # Check transaction timestamp
+        current_time = time.time()
+        txn_time = txn.time
+        time_diff = current_time - txn_time
+
+        if time_diff > 7200:  # 2 hours in seconds
+            self.config.app_log.warning(f"Outdated transaction detected!")
             if stream.peer.protocol_version > 2:
                 await self.write_result(
                     stream, "newtxn_confirmed", body.get("params", {}), body["id"]
                 )
-        elif payload.get("hash"):
-            txn = Transaction.from_dict(payload)
-            if stream.peer.protocol_version > 2:
-                await self.write_result(
-                    stream,
-                    "newtxn_confirmed",
-                    {"transaction": body.get("params", {})},
-                    body["id"],
-                )
-        else:
-            self.config.app_log.info("newtxn, no payload")
             return
+
+        # Checking for duplicates in mempool based on (public_key, inputs.id)
+        for input_item in txn.inputs:
+            existing_txn = await self.config.mongo.async_db.miner_transactions.find_one(
+                {"public_key": txn.public_key, "inputs.id": input_item.id}
+            )
+            if existing_txn:
+                self.config.app_log.warning(f"Duplicate transaction detected!")
+                if stream.peer.protocol_version > 2:
+                    await self.write_result(
+                        stream, "newtxn_confirmed", body.get("params", {}), body["id"]
+                    )
+                return
+
+        if stream.peer.protocol_version > 2:
+            await self.write_result(
+                stream, "newtxn_confirmed", body.get("params", {}), body["id"]
+            )
 
         self.newtxn_tracker.by_host[stream.peer.host] = (
             self.newtxn_tracker.by_host.get(stream.peer.host, 0) + 1
@@ -392,22 +415,70 @@ class NodeRPC(BaseRPC):
                     (peer_stream.peer.rid, "newtxn", txn.transaction_signature)
                 ] = payload
 
-    async def send_block_to_peers(self, block):
+    async def send_block_to_peers(self, block, max_concurrent=20):
+        self.config.app_log.info("Starting send_block_to_peers...")
+        semaphore = Semaphore(max_concurrent)
+        tasks = []
+
+        async def send_with_semaphore(peer_stream):
+            async with semaphore:
+                try:
+                    peer_id = getattr(peer_stream.peer, "rid", "Unknown")
+                    self.config.app_log.info(
+                        f"Processing peer: {peer_id}, block index: {block.index}"
+                    )
+
+                    if (
+                        hasattr(peer_stream.peer, "block")
+                        and peer_stream.peer.block.index > block.index + 100
+                    ):
+                        self.config.app_log.info(
+                            f"Skipping peer {peer_id} due to block height mismatch."
+                        )
+                        return
+
+                    await asyncio.wait_for(
+                        self.send_block_to_peer(block, peer_stream), timeout=10
+                    )
+
+                except asyncio.TimeoutError:
+                    self.config.app_log.warning(
+                        f"Timeout while sending block to peer {peer_id}."
+                    )
+                    await self.remove_peer(
+                        peer_stream, reason="Timeout during block sending"
+                    )
+                except asyncio.CancelledError:
+                    self.config.app_log.warning(
+                        f"CancelledError while sending block to peer {peer_id}."
+                    )
+                    await self.remove_peer(
+                        peer_stream, reason="CancelledError during block sending"
+                    )
+                except Exception as e:
+                    self.config.app_log.error(
+                        f"Error sending block to peer {peer_id}: {e}"
+                    )
+                    await self.remove_peer(peer_stream, reason=f"Error: {e}")
+
         async for peer_stream in self.config.peer.get_sync_peers():
-            if (
-                hasattr(peer_stream.peer, "block")
-                and peer_stream.peer.block.index > block.index + 100
-            ):
-                continue
-            await self.send_block_to_peer(block, peer_stream)
+            tasks.append(send_with_semaphore(peer_stream))
+
+        await gather(*tasks, return_exceptions=True)
+        self.config.app_log.info("Finished send_block_to_peers.")
 
     async def send_block_to_peer(self, block, peer_stream):
         payload = {"payload": {"block": block.to_dict()}}
-        await self.write_params(peer_stream, "newblock", payload)
-        if peer_stream.peer.protocol_version > 1:
-            self.retry_messages[
-                (peer_stream.peer.rid, "newblock", block.hash)
-            ] = payload
+        peer_id = getattr(peer_stream.peer, "rid", "Unknown")
+        try:
+            await self.write_params(peer_stream, "newblock", payload)
+            if peer_stream.peer.protocol_version > 1:
+                self.retry_messages[(peer_id, "newblock", block.hash)] = payload
+        except Exception as e:
+            self.config.app_log.error(
+                f"Error in send_block_to_peer for peer {peer_id}: {e}"
+            )
+            raise
 
     async def get_next_block(self, block):
         async for peer_stream in self.config.peer.get_sync_peers():

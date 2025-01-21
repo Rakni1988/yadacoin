@@ -125,6 +125,15 @@ class BlockCheckerHealth(HealthItem):
     async def check_health(self):
         if time.time() - self.last_activity > self.timeout:
             self.report_bad_health("Background block checker health check failed")
+
+            if hasattr(self.config, "background_block_checker"):
+                self.config.nodeShared.retry_messages = {}
+                self.config.app_log.info("Cleared NodeRPC.retry_messages during block checker reset.")
+
+                self.config.background_block_checker.busy = False
+                self.config.background_block_checker.last_send = 0
+                self.config.app_log.info("Resetting background_block_checker state.")
+
             return self.report_status(False)
 
         return self.report_status(True)
@@ -133,6 +142,14 @@ class BlockCheckerHealth(HealthItem):
 class MessageSenderHealth(HealthItem):
     async def check_health(self):
         if time.time() - self.last_activity > self.timeout:
+            self.config.app_log.warning("Resetting message sender due to timeout.")
+
+            self.config.nodeServer.retry_messages = {}
+            self.config.nodeClient.retry_messages = {}
+
+            if hasattr(self.config, "background_message_sender"):
+                self.config.background_message_sender.busy = False
+
             tornado.ioloop.IOLoop.current().spawn_callback(
                 self.config.application.background_message_sender
             )
