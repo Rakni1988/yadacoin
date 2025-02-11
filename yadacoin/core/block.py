@@ -644,12 +644,11 @@ class Block(object):
                     masternode_fee_sum += float(txn.masternode_fee)
 
             if self.index >= CHAIN.XEGGEX_HACK_FORK:
-                for output in txn.outputs:
-                    if output.to == "1Kh8tcPNxJsDH4KJx4TzLbqWwihDfhFpzj":
-                        raise XeggexAccountFrozenException(
-                            "Xeggex wallet has been frozen."
-                        )
-
+                if txn.public_key == "02fd3ad0e7a613672d9927336d511916e15c507a1fab225ed048579e9880f15fed":
+                    raise XeggexAccountFrozenException(
+                        "Xeggex wallet has been frozen"
+                    )
+                        
         reward = CHAIN.get_block_reward(self.index)
 
         # if Decimal(str(fee_sum)[:10]) != Decimal(str(coinbase_sum)[:10]) - Decimal(str(reward)[:10]):
