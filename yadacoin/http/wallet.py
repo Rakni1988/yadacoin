@@ -1,4 +1,17 @@
 """
+YadaCoin Open Source License (YOSL) v1.1
+
+Copyright (c) 2017-2025 Matthew Vogel, Reynold Vogel, Inc.
+
+This software is licensed under YOSL v1.1 – for personal and research use only.
+NO commercial use, NO blockchain forks, and NO branding use without permission.
+
+For commercial license inquiries, contact: info@yadacoin.io
+
+Full license terms: see LICENSE.txt in this repository.
+"""
+
+"""
 Handlers required by the wallet operations
 """
 
@@ -571,6 +584,7 @@ class TransactionByIdHandler(BaseHandler):
         )
 
         # Pobranie transakcji z blockchainu
+
         result = await self.config.mongo.async_db.blocks.find_one(
             {"transactions.id": txn_id}, {"_id": 0, "transactions": 1}
         )
