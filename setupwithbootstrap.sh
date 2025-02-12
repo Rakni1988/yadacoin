@@ -4,20 +4,29 @@
 sudo mkdir /data/db -p
 sudo chmod 777 /data/db
 sudo apt-get install -y gnupg
-if [[ $(lsb_release -rs) == "22.04" ]]; then
-    sudo sed -i "/#\$nrconf{restart} = 'i';/s/.*/\$nrconf{restart} = 'a';/" /etc/needrestart/needrestart.conf # prevent interactive prompt
-    wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.0g-2ubuntu4_amd64.deb
-    sudo dpkg -i ./libssl1.1_1.1.0g-2ubuntu4_amd64.deb
-    rm -rf libssl1.1_1.1.0g-2ubuntu4_amd64.deb
+
+# Sprawdzenie wersji Ubuntu
+UBUNTU_VERSION=$(lsb_release -rs)
+
+# Poprawione dodanie klucza MongoDB
+wget -qO - https://pgp.mongodb.com/server-4.4.asc | sudo tee /etc/apt/trusted.gpg.d/mongodb-org-4.4.gpg > /dev/null
+
+if [[ "$UBUNTU_VERSION" == "22.04" ]]; then
+    sudo sed -i "/#\$nrconf{restart} = 'i';/s/.*/\$nrconf{restart} = 'a';/" /etc/needrestart/needrestart.conf
+    sudo apt-get install -y libssl1.1 || wget http://security.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2.19_amd64.deb && sudo dpkg -i libssl1.1_1.1.1f-1ubuntu2.19_amd64.deb
 fi
-wget -qO - https://www.mongodb.org/static/pgp/server-4.4.asc | sudo apt-key add -
-if [[ $(lsb_release -rs) == "20.04" ]]; then
+
+if [[ "$UBUNTU_VERSION" == "20.04" ]]; then
     echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-4.4.list
 else
     echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu bionic/mongodb-org/4.4 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-4.4.list
 fi
+
 sudo apt-get update
 sudo apt-get install -y mongodb-org libssl-dev cmake python3-pip libjpeg-dev build-essential git
+
+# Fix potential package conflicts
+sudo apt --fix-broken install -y
 
 # Setup and start DB service
 sudo systemctl enable mongod.service
@@ -56,7 +65,6 @@ EOL
 sudo -H python3 -m pip install --upgrade pip
 sudo -H python3 -m pip install pyopenssl --upgrade
 sudo -H python3 -m pip install -r requirements.txt
-# get the correct chardet and urllib3 versions for yada code
 sudo python3 -m pip install --upgrade requests
 
 # enable systemd startup
@@ -64,7 +72,6 @@ sudo systemctl enable yadanode.service
 
 # start the yadanode.service
 sudo systemctl start yadanode.service
-
 
 # display message post installation
 sudo bash -c "cat > /etc/yadacoin/WELCOME" << EOL
