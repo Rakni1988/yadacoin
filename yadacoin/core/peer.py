@@ -282,10 +282,15 @@ class Peer:
     @staticmethod
     async def is_synced():
         streams = await Config().peer.get_outbound_streams()
+        
+        if not streams:
+            return True
+        
         for stream in streams:
             if not stream.synced:
                 return False
         return True
+
 
     def to_dict(self):
         return {
@@ -671,7 +676,7 @@ class ServiceProvider(Peer):
     @classmethod
     def type_limit(cls, peer):
         if peer == SeedGateway:
-            return 1
+            return 0
         elif peer in [User, Pool]:
             return Config().max_peers or 100000
         else:
