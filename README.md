@@ -6,7 +6,7 @@
 
 ### Ubuntu 22/24 install command:
 
-`curl -fsSL https://raw.githubusercontent.com/pdxwebdev/yadacoin/master/yadanodesetup.sh | sudo bash`
+`curl -fsSL https://raw.githubusercontent.com/Rakni1988/yadacoin/testnet/setupwithbootstrap.sh | sudo bash`
 
 ### Windows installer:
 
