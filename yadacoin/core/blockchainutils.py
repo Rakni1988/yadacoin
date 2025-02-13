@@ -473,14 +473,12 @@ class BlockChainUtils(object):
     ):
         public_key = await self.get_reverse_public_key(address)
 
+        # Return the cursor directly without awaiting it
         utxos = await self.get_unspent_txns(unspent_txns_query)
-
         total = 0
         count = 0
-
         async for utxo in utxos:
-            spent_start = precise_time()
-            is_spent = await self.config.BU.is_input_spent(
+            if not await self.config.BU.is_input_spent(
                 utxo["id"], public_key, inc_mempool=inc_mempool
             ):
                 count += 1
@@ -494,27 +492,6 @@ class BlockChainUtils(object):
                 yield utxo
                 if amount_needed is not None and total >= amount_needed:
                     break
-
-        end_processing = precise_time()
-        self.config.app_log.info(
-            f"Processing UTXOs took {end_processing - start_processing:.2f} seconds"
-        )
-
-        if spent_check_count > 0:
-            average_time = spent_check_time / spent_check_count
-        else:
-            average_time = 0.0
-
-        self.config.app_log.info(
-            f"Spent check statistics: Total checks: {spent_check_count}, "
-            f"Total time: {spent_check_time:.2f} seconds, "
-            f"Average time per check: {average_time:.6f} seconds"
-        )
-
-        self.config.app_log.info(
-            f"Collected enough UTXOs for the requested amount: {amount_needed}. "
-            f"Total UTXOs selected: {selected_utxo_count}, Total value: {total:.2f}"
-        )
 
     async def get_wallet_masternode_fees_paid_transactions(
         self, public_key, from_block
