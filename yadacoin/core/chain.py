@@ -91,7 +91,7 @@ class CHAIN(object):
     CHECK_MAX_INPUTS_FORK = 463590
     CHECK_MASTERNODE_FEE_FORK = 507500
     XEGGEX_HACK_FORK = 528360
-    CHECK_KEL_FORK = 530500
+    CHECK_KEL_FORK = 529670
 
     @classmethod
     def target_block_time(cls, network: str):
