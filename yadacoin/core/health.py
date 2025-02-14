@@ -58,7 +58,7 @@ class TCPServerHealth(HealthItem):
         if not streams:
             return self.report_status(True, ignore=True)
 
-        if time.time() - self.last_activity > self.timeout:
+        if time.time() - self.last_activity > 600:
             self.report_bad_health("TCP Server health check failed")
             return self.report_status(False)
 
@@ -87,11 +87,11 @@ class TCPClientHealth(HealthItem):
         if not streams:
             return self.report_status(True, ignore=True)
 
-        if time.time() - self.last_activity > self.timeout:
+        if time.time() - self.last_activity > 600:
             self.report_bad_health("TCP Client health check failed")
             streams = await self.config.peer.get_all_outbound_streams()
             for stream in streams:
-                if time.time() - stream.last_activity > self.timeout:
+                if time.time() - stream.last_activity > 600:
                     await self.config.nodeClient.remove_peer(
                         stream, reason="TCPClientHealth: Stream timeout"
                     )
