@@ -662,6 +662,7 @@ class NodeRPC(BaseRPC):
 
         try:
             stream.peer = peerCls.from_dict(params.get("peer"))
+            stream.session_id = str(uuid4())
         except:
             self.config.app_log.error("invalid peer identity")
             stream.close()
