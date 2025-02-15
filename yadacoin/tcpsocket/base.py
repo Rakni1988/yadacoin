@@ -330,6 +330,14 @@ class RPCSocketClient(TCPClient):
             stream = await super(RPCSocketClient, self).connect(
                 peer.host, peer.port, timeout=timedelta(seconds=1)
             )
+
+            sock = stream.socket
+            if sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 15)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
+
             stream.synced = False
             stream.syncing = False
             stream.message_queue = {}

@@ -50,8 +50,6 @@ class HealthItem:
 
 
 class TCPServerHealth(HealthItem):
-    timeout = 600
-
     async def check_health(self):
         streams = (
             await self.config.peer.get_all_inbound_streams()
@@ -84,8 +82,6 @@ class TCPServerHealth(HealthItem):
 
 
 class TCPClientHealth(HealthItem):
-    timeout = 600
-
     async def check_health(self):
         streams = await self.config.peer.get_all_outbound_streams()
         if not streams:
