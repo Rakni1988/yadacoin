@@ -223,13 +223,14 @@ class RPCSocketServer(TCPServer, BaseRPC):
 
             except StreamClosedError:
                 if hasattr(stream, "peer"):
-                    current_session = self.config.nodeServer.inbound_streams.get(stream.peer.__class__.__name__, {}).get(stream.peer.rid)
-                    
-                    if current_session and getattr(current_session, "session_id", None) != stream.session_id:
-                        self.config.app_log.warning(
-                            f"⚠️ Ignoring disconnect for old session {stream.session_id}. New session {current_session.session_id} is active."
-                        )
-                        break
+                    if hasattr(stream.peer, "identity") and stream.peer.identity is not None:
+                        current_session = self.config.nodeServer.inbound_streams.get(stream.peer.__class__.__name__, {}).get(stream.peer.rid)
+                        
+                        if current_session and getattr(current_session, "session_id", None) != stream.session_id:
+                            self.config.app_log.warning(
+                                f"⚠️ Ignoring disconnect for old session {stream.session_id}. New session {current_session.session_id} is active."
+                            )
+                            break
 
                     self.config.app_log.warning(
                         f"🔴 Disconnected from {stream.peer.__class__.__name__}: {stream.peer.to_json()}"
