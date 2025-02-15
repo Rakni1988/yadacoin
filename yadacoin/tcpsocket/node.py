@@ -688,8 +688,8 @@ class NodeRPC(BaseRPC):
             self.config.app_log.warning(f"⚠️ Removing old inbound_pending entry for {generic_peer.rid}")
             old_stream = self.config.nodeServer.inbound_pending[stream.peer.__class__.__name__].pop(generic_peer.rid, None)
             if old_stream:
-                await self.remove_peer(old_stream, close=True, reason="Replacing old pending peer")
-
+                old_stream.close()
+                
         if (
             generic_peer.rid
             in self.config.nodeServer.inbound_streams[stream.peer.__class__.__name__]
@@ -697,7 +697,7 @@ class NodeRPC(BaseRPC):
             self.config.app_log.warning(f"⚠️ Detected duplicate connection for {generic_peer.rid}. Closing OLD inbound stream.")
             old_stream = self.config.nodeServer.inbound_streams[stream.peer.__class__.__name__].pop(generic_peer.rid, None)
             if old_stream:
-                await self.remove_peer(old_stream, close=True, reason="Replacing old inbound peer connection")
+                old_stream.close()
 
         if (
             generic_peer.rid
@@ -706,7 +706,7 @@ class NodeRPC(BaseRPC):
             self.config.app_log.warning(f"⚠️ Removing old outbound_pending entry for {generic_peer.rid}")
             old_stream = self.config.nodeClient.outbound_pending[stream.peer.__class__.__name__].pop(generic_peer.rid, None)
             if old_stream:
-                await self.remove_peer(old_stream, close=True, reason="Replacing old outbound pending peer")
+                old_stream.close()
 
         if (
             generic_peer.rid
@@ -715,7 +715,7 @@ class NodeRPC(BaseRPC):
             self.config.app_log.warning(f"⚠️ Detected duplicate outbound connection for {generic_peer.rid}. Closing OLD stream.")
             old_stream = self.config.nodeClient.outbound_streams[stream.peer.__class__.__name__].pop(generic_peer.rid, None)
             if old_stream:
-                await self.remove_peer(old_stream, close=True, reason="Replacing old outbound peer connection")
+                old_stream.close()
 
         try:
             result = verify_signature(
