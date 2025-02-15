@@ -687,10 +687,9 @@ class NodeRPC(BaseRPC):
         ):
             await self.remove_peer(
                 stream,
-                close=False,
+                close=True,
                 reason=f"{generic_peer.rid} in nodeServer.inbound_pending",
             )
-            return {}
 
         if (
             generic_peer.rid
@@ -698,10 +697,9 @@ class NodeRPC(BaseRPC):
         ):
             await self.remove_peer(
                 stream,
-                close=False,
+                close=True,
                 reason=f"{generic_peer.rid} in nodeServer.inbound_streams",
             )
-            return {}
 
         if (
             generic_peer.rid
@@ -709,10 +707,9 @@ class NodeRPC(BaseRPC):
         ):
             await self.remove_peer(
                 stream,
-                close=False,
+                close=True,
                 reason=f"{generic_peer.rid} in nodeServer.outbound_pending",
             )
-            return
 
         if (
             generic_peer.rid
@@ -720,10 +717,9 @@ class NodeRPC(BaseRPC):
         ):
             await self.remove_peer(
                 stream,
-                close=False,
+                close=True,
                 reason=f"{generic_peer.rid} in nodeServer.outbound_streams",
             )
-            return
 
         try:
             result = verify_signature(
