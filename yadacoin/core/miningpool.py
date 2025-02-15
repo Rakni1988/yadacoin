@@ -104,7 +104,7 @@ class MiningPool(object):
         self.config.app_log.debug(f"Nonce for job {job.index}: {nonce}")
 
         hash1 = self.block_factory.generate_hash_from_header(job.index, header, nonce)
-        self.config.app_log.info(f"Hash1 for job {job.index}: {hash1}")
+        #self.config.app_log.info(f"Hash1 for job {job.index}: {hash1}")
 
         if self.block_factory.index >= CHAIN.BLOCK_V5_FORK:
             hash1_test = Blockchain.little_hash(hash1)

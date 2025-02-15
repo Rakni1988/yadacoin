@@ -331,12 +331,34 @@ class NodeRPC(BaseRPC):
     async def newblock(self, body, stream):
         payload = body.get("params", {}).get("payload", {})
         if not payload.get("block"):
-            self.config.app_log.info("newblock, no payload")
+            self.config.app_log.info("⚠️ Received `newblock`, but no payload")
+            return
+
+        block_index = payload["block"].get("index")
+        block_hash = payload["block"].get("hash")
+
+        self.config.app_log.info(
+            f"Received new block {block_index} | Hash: {block_hash} | Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+
+        existing_block = await self.config.mongo.async_db.blocks.find_one(
+            {"index": block_index, "hash": block_hash}
+        )
+
+        if existing_block:
+            self.config.app_log.info(
+                f"⚠️ Block {block_index} already exists in DB, skipping processing."
+            )
+            if stream.peer.protocol_version > 1:
+                await self.config.nodeShared.write_result(
+                    stream, "newblock_confirmed", body.get("params", {}), body["id"]
+                )
             return
 
         self.config.processing_queues.block_queue.add(
             BlockProcessingQueueItem(Blockchain(payload.get("block")), stream, body)
         )
+
         if stream.peer.protocol_version > 1:
             await self.config.nodeShared.write_result(
                 stream, "newblock_confirmed", body.get("params", {}), body["id"]
@@ -345,6 +367,10 @@ class NodeRPC(BaseRPC):
     async def newblock_confirmed(self, body, stream):
         payload = body.get("result", {}).get("payload")
         block = await Block.from_dict(payload.get("block"))
+
+        self.config.app_log.info(
+            f"✅ Block {block.index} confirmed "
+        )
 
         if (stream.peer.rid, "newblock", block.hash) in self.retry_messages:
             del self.retry_messages[(stream.peer.rid, "newblock", block.hash)]
@@ -417,20 +443,37 @@ class NodeRPC(BaseRPC):
 
     async def send_block_to_peers(self, block):
         async for peer_stream in self.config.peer.get_sync_peers():
+            peer_id = getattr(peer_stream.peer, "rid", "Unknown")
             if (
                 hasattr(peer_stream.peer, "block")
-                and peer_stream.peer.block.index > block.index + 100
+                and peer_stream.peer.block.index > block.index + 10
             ):
+                self.config.app_log.info(
+                    f"⚠️ Skipping peer {peer_id} due to block height mismatch."
+                )
                 continue
+
             await self.send_block_to_peer(block, peer_stream)
+
+        self.config.app_log.info(f"✅ Finished sending block {block.index}")
 
     async def send_block_to_peer(self, block, peer_stream):
         payload = {"payload": {"block": block.to_dict()}}
-        await self.write_params(peer_stream, "newblock", payload)
-        if peer_stream.peer.protocol_version > 1:
-            self.retry_messages[
-                (peer_stream.peer.rid, "newblock", block.hash)
-            ] = payload
+        peer_id = getattr(peer_stream.peer, "rid", "Unknown")
+
+        try:
+            self.config.app_log.info(
+                f"Sending block {block.index} to peer {peer_id} | Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            await self.write_params(peer_stream, "newblock", payload)
+
+            if peer_stream.peer.protocol_version > 1:
+                self.retry_messages[(peer_stream.peer.rid, "newblock", block.hash)] = payload
+
+        except Exception as e:
+            self.config.app_log.error(
+                f"Error sending block {block.index} to peer {peer_id}: {e}"
+            )
 
     async def get_next_block(self, block):
         async for peer_stream in self.config.peer.get_sync_peers():

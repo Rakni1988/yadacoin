@@ -173,13 +173,35 @@ class RPCSocketServer(TCPServer, BaseRPC):
         stream.synced = False
         stream.syncing = False
         stream.message_queue = {}
+
         while True:
             try:
                 data = await stream.read_until(b"\n")
                 stream.last_activity = int(time.time())
                 self.config.health.tcp_server.last_activity = time.time()
-                body = json.loads(data)
+
+                if not data.strip():
+                    self.config.app_log.warning(f"⚠️ Received empty data from {address}, closing connection.")
+                    await self.remove_peer(stream, reason="Received empty data")
+                    break
+
+                try:
+                    body = json.loads(data)
+                except json.JSONDecodeError:
+                    self.config.app_log.warning(
+                        f"⚠️ Received invalid JSON from {address}: {data[:100]}"
+                    )
+                    await self.remove_peer(stream, reason="Invalid JSON format")
+                    break
+                except UnicodeDecodeError:
+                    self.config.app_log.warning(
+                        f"⚠️ Received non-UTF8 data from {address}: {data[:100]}"
+                    )
+                    await self.remove_peer(stream, reason="Non-UTF8 data")
+                    break
+
                 method = body.get("method")
+
                 if "result" in body:
                     if method in REQUEST_RESPONSE_MAP:
                         if body["id"] in stream.message_queue.get(
@@ -188,59 +210,35 @@ class RPCSocketServer(TCPServer, BaseRPC):
                             del stream.message_queue[REQUEST_RESPONSE_MAP[method]][
                                 body["id"]
                             ]
+
                 if not hasattr(self, method):
+                    self.config.app_log.warning(f"⚠️ Received unknown method `{method}` from {address}")
                     continue
-                if hasattr(stream, "peer"):
-                    if hasattr(stream.peer, "host"):
-                        if (
-                            hasattr(self.config, "tcp_traffic_debug")
-                            and self.config.tcp_traffic_debug == True
-                        ):
-                            self.config.app_log.debug(
-                                f"SERVER RECEIVED {stream.peer.host} {method} {body}"
-                            )
-                    if hasattr(stream.peer, "address"):
-                        if (
-                            hasattr(self.config, "tcp_traffic_debug")
-                            and self.config.tcp_traffic_debug == True
-                        ):
-                            self.config.app_log.debug(
-                                f"SERVER RECEIVED {stream.peer.address} {method} {body}"
-                            )
-                    id_attr = getattr(stream.peer, stream.peer.id_attribute)
-                    if (
-                        id_attr
-                        not in self.config.nodeServer.inbound_streams[
-                            stream.peer.__class__.__name__
-                        ]
-                    ):
-                        await self.remove_peer(
-                            stream,
-                            reason=f"{id_attr} not in nodeServer.inbound_streams",
-                        )
+
                 if not hasattr(stream, "peer") and method not in ["login", "connect"]:
                     await self.remove_peer(stream)
                     break
+
                 await getattr(self, method)(body, stream)
+
             except StreamClosedError:
                 if hasattr(stream, "peer"):
                     self.config.app_log.warning(
-                        "Disconnected from {}: {}".format(
-                            stream.peer.__class__.__name__, stream.peer.to_json()
-                        )
+                        f"🔴 Disconnected from {stream.peer.__class__.__name__}: {stream.peer.to_json()}"
                     )
                 await self.remove_peer(stream)
                 break
-            except:
+            except Exception as e:
                 if hasattr(stream, "peer"):
                     self.config.app_log.warning(
-                        "Bad data from {}: {}".format(
-                            stream.peer.__class__.__name__, stream.peer.to_json()
-                        )
+                        f"❌ Bad data from {stream.peer.__class__.__name__}: {stream.peer.to_json()}"
                     )
-                await self.remove_peer(stream, reason="BaseRPC: unhandled exception 2")
-                self.config.app_log.warning("{}".format(format_exc()))
-                self.config.app_log.warning(data)
+                else:
+                    self.config.app_log.warning(f"❌ Unhandled exception {e}")
+
+                await self.remove_peer(stream, reason="BaseRPC: unhandled exception")
+                self.config.app_log.warning(format_exc())
+                self.config.app_log.warning(f"⚠️ Received raw data: {data[:100]}")
                 break
 
     async def remove_peer(self, stream, close=True, reason=None):
