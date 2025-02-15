@@ -685,41 +685,37 @@ class NodeRPC(BaseRPC):
             generic_peer.rid
             in self.config.nodeServer.inbound_pending[stream.peer.__class__.__name__]
         ):
-            await self.remove_peer(
-                stream,
-                close=True,
-                reason=f"{generic_peer.rid} in nodeServer.inbound_pending",
-            )
+            self.config.app_log.warning(f"⚠️ Removing old inbound_pending entry for {generic_peer.rid}")
+            old_stream = self.config.nodeServer.inbound_pending[stream.peer.__class__.__name__].pop(generic_peer.rid, None)
+            if old_stream:
+                await self.remove_peer(old_stream, close=True, reason="Replacing old pending peer")
 
         if (
             generic_peer.rid
             in self.config.nodeServer.inbound_streams[stream.peer.__class__.__name__]
         ):
-            await self.remove_peer(
-                stream,
-                close=True,
-                reason=f"{generic_peer.rid} in nodeServer.inbound_streams",
-            )
+            self.config.app_log.warning(f"⚠️ Detected duplicate connection for {generic_peer.rid}. Closing OLD inbound stream.")
+            old_stream = self.config.nodeServer.inbound_streams[stream.peer.__class__.__name__].pop(generic_peer.rid, None)
+            if old_stream:
+                await self.remove_peer(old_stream, close=True, reason="Replacing old inbound peer connection")
 
         if (
             generic_peer.rid
             in self.config.nodeClient.outbound_pending[stream.peer.__class__.__name__]
         ):
-            await self.remove_peer(
-                stream,
-                close=True,
-                reason=f"{generic_peer.rid} in nodeServer.outbound_pending",
-            )
+            self.config.app_log.warning(f"⚠️ Removing old outbound_pending entry for {generic_peer.rid}")
+            old_stream = self.config.nodeClient.outbound_pending[stream.peer.__class__.__name__].pop(generic_peer.rid, None)
+            if old_stream:
+                await self.remove_peer(old_stream, close=True, reason="Replacing old outbound pending peer")
 
         if (
             generic_peer.rid
             in self.config.nodeClient.outbound_streams[stream.peer.__class__.__name__]
         ):
-            await self.remove_peer(
-                stream,
-                close=True,
-                reason=f"{generic_peer.rid} in nodeServer.outbound_streams",
-            )
+            self.config.app_log.warning(f"⚠️ Detected duplicate outbound connection for {generic_peer.rid}. Closing OLD stream.")
+            old_stream = self.config.nodeClient.outbound_streams[stream.peer.__class__.__name__].pop(generic_peer.rid, None)
+            if old_stream:
+                await self.remove_peer(old_stream, close=True, reason="Replacing old outbound peer connection")
 
         try:
             result = verify_signature(
