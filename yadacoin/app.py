@@ -566,57 +566,85 @@ class NodeApplication(Application):
         try:
             async with self.config.lock:
 
-                async def process_retry_messages(retry_messages, stream_dict, stream_type):
+                async def process_retry_messages(
+                    retry_messages, stream_dict, stream_type
+                ):
                     for x in list(retry_messages.keys()):
                         message = retry_messages.get(x)
+
                         if not message:
                             retry_messages.pop(x, None)
-                            self.config.app_log.debug(f"{stream_type} - Removed empty retry message {x}.")
+                            self.config.app_log.debug(
+                                f"{stream_type} - Removed empty retry message {x}."
+                            )
                             continue
 
-                        key = (x[0], x[1])
+                        message_id = message.get("id", "unknown")
+                        key = (x[0], x[1], message_id)  # Klucz zawiera też ID wiadomości
+
                         if key not in self.retry_counters:
                             self.retry_counters[key] = 0
 
                         self.retry_counters[key] += 1
-                        self.config.app_log.info(f"🔄 Retrying message {key} for {stream_type}, attempt {self.retry_counters[key]}.")
+                        self.config.app_log.info(
+                            f"🔄 Retrying message {key} for {stream_type}, attempt {self.retry_counters[key]}."
+                        )
+
+                        # Logowanie kluczy w message_queue
+                        for peer_cls in list(stream_dict.keys()).copy():
+                            if x[0] in stream_dict[peer_cls]:
+                                peer_stream = stream_dict[peer_cls][x[0]]
+                                queue_keys = list(peer_stream.message_queue.get(x[1], {}).keys())
+                                self.config.app_log.info(
+                                    f"🔍 Checking retry message for {x[0]} in message_queue[{x[1]}]: {queue_keys}"
+                                )
 
                         if self.retry_counters[key] > 3:
                             self.delete_retry_messages(x[0])
-                            self.config.app_log.warning(f"⚠️ Message {key} exceeded retry limit. Removed from retry_messages.")
+                            self.config.app_log.warning(
+                                f"⚠️ Message {key} exceeded retry limit. Removed from retry_messages."
+                            )
 
                             try:
-                                for peer_cls in list(self.config.nodeServer.inbound_streams.keys()).copy():
-                                    if x[0] in self.config.nodeServer.inbound_streams[peer_cls]:
+                                for peer_cls in list(
+                                    self.config.nodeServer.inbound_streams.keys()
+                                ).copy():
+                                    if (
+                                        x[0]
+                                        in self.config.nodeServer.inbound_streams[
+                                            peer_cls
+                                        ]
+                                    ):
                                         await self.remove_peer(
-                                            self.config.nodeServer.inbound_streams[peer_cls][x[0]],
+                                            self.config.nodeServer.inbound_streams[
+                                                peer_cls
+                                            ][x[0]],
                                             reason="Exceeded retry limit",
                                         )
                                         break
 
-                                for peer_cls in list(self.config.nodeClient.outbound_streams.keys()).copy():
-                                    if x[0] in self.config.nodeClient.outbound_streams[peer_cls]:
+                                for peer_cls in list(
+                                    self.config.nodeClient.outbound_streams.keys()
+                                ).copy():
+                                    if (
+                                        x[0]
+                                        in self.config.nodeClient.outbound_streams[
+                                            peer_cls
+                                        ]
+                                    ):
                                         await self.remove_peer(
-                                            self.config.nodeClient.outbound_streams[peer_cls][x[0]],
+                                            self.config.nodeClient.outbound_streams[
+                                                peer_cls
+                                            ][x[0]],
                                             reason="Exceeded retry limit",
                                         )
                                         break
+
                             except Exception as e:
-                                self.config.app_log.error(f"Failed to remove peer {x[0]}: {e}")
+                                self.config.app_log.error(
+                                    f"❌ Failed to remove peer {x[0]}: {e}"
+                                )
 
-                            continue
-
-                        peer_rid = x[0]
-                        method = x[1]
-                        if peer_rid in stream_dict and method in stream_dict[peer_rid].message_queue:
-                            msg_ids = list(stream_dict[peer_rid].message_queue[method].keys())
-                            if x[2] not in msg_ids:
-                                self.config.app_log.warning(f"⚠️ Message ID {x[2]} not found in message_queue[{method}]. Removing from retry_messages.")
-                                retry_messages.pop(x, None)  # Usuwamy z retry_messages
-                                continue
-                        else:
-                            self.config.app_log.warning(f"❌ Missing message_queue[{method}] for {peer_rid}! Removing from retry_messages.")
-                            retry_messages.pop(x, None)
                             continue
 
                         for peer_cls in list(stream_dict.keys()).copy():
@@ -624,20 +652,37 @@ class NodeApplication(Application):
                                 peer_stream = stream_dict[peer_cls][x[0]]
                                 try:
                                     if len(x) > 3:
-                                        await asyncio.wait_for(
-                                            self.config.nodeShared.write_result(peer_stream, x[1], message, x[3]), 
-                                            timeout=5
+                                        await self.config.nodeShared.write_result(
+                                            peer_stream,
+                                            x[1],
+                                            message,
+                                            x[3],
                                         )
                                     else:
-                                        await asyncio.wait_for(
-                                            self.config.nodeShared.write_params(peer_stream, x[1], message), 
-                                            timeout=5
+                                        await self.config.nodeShared.write_params(
+                                            peer_stream,
+                                            x[1],
+                                            message,
                                         )
                                 except asyncio.TimeoutError:
-                                    self.config.app_log.warning(f"⏳ Timeout while writing message {x[2]} to peer {x[0]}. Skipping this attempt.")
+                                    self.config.app_log.warning(
+                                        f"⏳ Timeout while writing message {message_id} to {x[0]}"
+                                    )
+                                except Exception as e:
+                                    self.config.app_log.error(
+                                        f"❌ Error writing to peer {x[0]}: {e}"
+                                    )
 
-                await process_retry_messages(self.config.nodeServer.retry_messages, self.config.nodeServer.inbound_streams, "nodeServer")
-                await process_retry_messages(self.config.nodeClient.retry_messages, self.config.nodeClient.outbound_streams, "nodeClient")
+                await process_retry_messages(
+                    self.config.nodeServer.retry_messages,
+                    self.config.nodeServer.inbound_streams,
+                    "nodeServer",
+                )
+                await process_retry_messages(
+                    self.config.nodeClient.retry_messages,
+                    self.config.nodeClient.outbound_streams,
+                    "nodeClient",
+                )
 
                 self.config.health.message_sender.last_activity = int(time())
 
