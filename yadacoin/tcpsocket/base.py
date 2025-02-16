@@ -99,8 +99,12 @@ class BaseRPC:
             self.config.app_log.info(f"After adding: message_queue[{method}] = {list(stream.message_queue[method].keys())}")
 
         try:
-            await stream.write("{}\n".format(json.dumps(rpc_data)).encode())
+            await asyncio.wait_for(stream.write("{}\n".format(json.dumps(rpc_data)).encode()), timeout=5)
 
+        except asyncio.TimeoutError:
+            self.config.app_log.warning(
+                f"⏳ Timeout while writing message {rpc_data['id']} to {stream.peer.rid}"
+            )
         except asyncio.CancelledError:
             self.config.app_log.warning(
                 f"CancelledError while writing to stream: {getattr(stream.peer, 'rid', 'Unknown')}. Skipping."
