@@ -84,14 +84,19 @@ class BaseRPC:
             rpc_type: data,
         }
 
-        # Zarządzanie message_queue
         if rpc_type == "params":
             if method not in stream.message_queue:
                 stream.message_queue[method] = {}
+
+            self.config.app_log.info(f"Before adding: message_queue[{method}] = {list(stream.message_queue[method].keys())}")
+
             if len(stream.message_queue[method].keys()) > 25:
                 queue_key = list(stream.message_queue[method].keys())[0]
                 del stream.message_queue[method][queue_key]
+
             stream.message_queue[method][rpc_data["id"]] = rpc_data
+
+            self.config.app_log.info(f"After adding: message_queue[{method}] = {list(stream.message_queue[method].keys())}")
 
         try:
             await stream.write("{}\n".format(json.dumps(rpc_data)).encode())
@@ -304,8 +309,29 @@ class RPCSocketServer(TCPServer, BaseRPC):
                 data = await stream.read_until(b"\n")
                 stream.last_activity = int(time.time())
                 self.config.health.tcp_server.last_activity = time.time()
-                body = json.loads(data)
+
+                if not data.strip():
+                    self.config.app_log.warning(f"⚠️ Received empty data from {address}, closing connection.")
+                    await self.remove_peer(stream, reason="Received empty data")
+                    break
+
+                try:
+                    body = json.loads(data)
+                except json.JSONDecodeError:
+                    self.config.app_log.warning(
+                        f"⚠️ Received invalid JSON from {address}: {data[:100]}"
+                    )
+                    await self.remove_peer(stream, reason="Invalid JSON format")
+                    break
+                except UnicodeDecodeError:
+                    self.config.app_log.warning(
+                        f"⚠️ Received non-UTF8 data from {address}: {data[:100]}"
+                    )
+                    await self.remove_peer(stream, reason="Non-UTF8 data")
+                    break
+
                 method = body.get("method")
+
                 if "result" in body:
                     if method in REQUEST_RESPONSE_MAP:
                         if body["id"] in stream.message_queue.get(
