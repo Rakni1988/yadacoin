@@ -16,11 +16,13 @@ import base64
 import binascii
 import hashlib
 import json
+import socket
 import time
 from datetime import timedelta
 from decimal import Decimal, getcontext
 from logging import getLogger
 
+import pyrx
 from bitcoin.signmessage import BitcoinMessage, VerifyMessage
 from bitcoin.wallet import P2PKHBitcoinAddress
 from coincurve.utils import verify_signature
@@ -28,11 +30,11 @@ from tornado.iostream import StreamClosedError
 from tornado.tcpclient import TCPClient
 from tornado.util import TimeoutError
 
-import pyrx
 import yadacoin.core.config
 from yadacoin.core.chain import CHAIN
 from yadacoin.core.config import Config
 from yadacoin.core.keyeventlog import (
+    DoesNotSpendEntirelyToPrerotatedKeyHashException,
     FatalKeyEventException,
     KELException,
     KELHashCollection,
@@ -70,8 +72,19 @@ async def test_node(node, semaphore):
     config = Config()
     async with semaphore:
         try:
+            # DNS resolution block
+            # Check if the DNS for the node's host resolves to an IP address.
+            # If the DNS lookup fails, log the error and skip testing this node.
+            try:
+                socket.gethostbyname(node.host)
+            except socket.gaierror as dns_error:
+                config.app_log.warning(
+                    f"DNS resolution failed for {node.host}:{node.port}, error: {dns_error}"
+                )
+                return None
+
             stream = await TCPClient().connect(
-                node.host, node.port, timeout=timedelta(seconds=1)
+                node.host, node.port, timeout=timedelta(seconds=2)
             )
             return node
         except StreamClosedError:
@@ -356,6 +369,25 @@ class Block(object):
             target=target,
         )
 
+        if index >= CHAIN.XEGGEX_HACK_FORK and index < CHAIN.CHECK_KEL_FORK:
+            for txn in block.transactions[:]:
+                remove = False
+                if (
+                    txn.public_key
+                    == "02fd3ad0e7a613672d9927336d511916e15c507a1fab225ed048579e9880f15fed"
+                ):
+                    remove = True
+                if not remove:
+                    for output in txn.outputs:
+                        if output.to == "1Kh8tcPNxJsDH4KJx4TzLbqWwihDfhFpzj":
+                            remove = True
+                            break
+                if remove:
+                    config.app_log.info(
+                        f"Txn removed from block: Xeggex wallet has been frozen."
+                    )
+                    block.transactions.remove(txn)
+
         if block.index >= CHAIN.CHECK_KEL_FORK:
             # check if this transaction public key is listed in any KEL
             # if it is, try to create a key even log
@@ -363,6 +395,12 @@ class Block(object):
             for txn in block.transactions[:]:
                 if txn not in block.transactions:
                     continue  # it's already been deleted due to its failed counterpart
+
+                if txn.are_kel_fields_populated():
+                    if txn.public_key_hash in [output.to for output in txn.outputs]:
+                        raise DoesNotSpendEntirelyToPrerotatedKeyHashException(
+                            "Key event transactions must spent entire remaining balance to prerotated_key_hash."
+                        )
 
                 # test if already on chain
                 if await txn.is_already_onchain():
@@ -707,6 +745,13 @@ class Block(object):
             if self.index >= CHAIN.CHECK_KEL_FORK:
                 # check if this transaction public key is listed in any KEL
                 # if it is, check if it's a valid key event
+
+                if txn.are_kel_fields_populated():
+                    if txn.public_key_hash in [output.to for output in txn.outputs]:
+                        raise DoesNotSpendEntirelyToPrerotatedKeyHashException(
+                            "Key event transactions must spent entire remaining balance to prerotated_key_hash."
+                        )
+
                 if await txn.has_key_event_log():
                     kel_hash_collection = await KELHashCollection.init_async(
                         self, verify_only=True
@@ -765,7 +810,10 @@ class Block(object):
                 if self.index >= CHAIN.CHECK_MASTERNODE_FEE_FORK:
                     masternode_fee_sum += float(txn.masternode_fee)
 
-            if self.index >= CHAIN.XEGGEX_HACK_FORK:
+            if (
+                self.index >= CHAIN.XEGGEX_HACK_FORK
+                and self.index < CHAIN.CHECK_KEL_FORK
+            ):
                 if (
                     txn.public_key
                     == "02fd3ad0e7a613672d9927336d511916e15c507a1fab225ed048579e9880f15fed"
