@@ -13,6 +13,7 @@ Full license terms: see LICENSE.txt in this repository.
 
 import base64
 import time
+import socket
 from asyncio import Semaphore, gather
 from uuid import uuid4
 
@@ -161,6 +162,21 @@ class NodeRPC(BaseRPC):
             txn = Transaction.from_dict(payload)
         else:
             self.config.app_log.info("newtxn, no payload")
+            return
+
+        # Check if transaction already exists in a block
+        existing_block_txn = await self.config.mongo.async_db.blocks.find_one(
+            {"transactions.id": txn.transaction_signature},
+            {"index": 1}
+        )
+        
+        if existing_block_txn:
+            block_index = existing_block_txn["index"]
+            self.config.app_log.warning(f"Transaction already exists in block {block_index}. Ignoring.")
+            if stream.peer.protocol_version > 2:
+                await self.write_result(
+                    stream, "newtxn_confirmed", {"status": "exists", "block": block_index}, body["id"]
+                )
             return
 
         # Check transaction timestamp
@@ -354,12 +370,30 @@ class NodeRPC(BaseRPC):
     async def newblock(self, body, stream):
         payload = body.get("params", {}).get("payload", {})
         if not payload.get("block"):
-            self.config.app_log.info("newblock, no payload")
+            self.config.app_log.info("⚠️ Received `newblock`, but no payload")
+            return
+
+        block_index = payload["block"].get("index")
+        block_hash = payload["block"].get("hash")
+
+        existing_block = await self.config.mongo.async_db.blocks.find_one(
+            {"index": block_index, "hash": block_hash}
+        )
+
+        if existing_block:
+            self.config.app_log.info(
+                f"⚠️ Block {block_index} already exists in DB, skipping processing."
+            )
+            if stream.peer.protocol_version > 1:
+                await self.config.nodeShared.write_result(
+                    stream, "newblock_confirmed", body.get("params", {}), body["id"]
+                )
             return
 
         self.config.processing_queues.block_queue.add(
             BlockProcessingQueueItem(Blockchain(payload.get("block")), stream, body)
         )
+
         if stream.peer.protocol_version > 1:
             await self.config.nodeShared.write_result(
                 stream, "newblock_confirmed", body.get("params", {}), body["id"]
@@ -368,6 +402,10 @@ class NodeRPC(BaseRPC):
     async def newblock_confirmed(self, body, stream):
         payload = body.get("result", {}).get("payload")
         block = await Block.from_dict(payload.get("block"))
+
+        self.config.app_log.info(
+            f"✅ Block {block.index} confirmed "
+        )
 
         if (stream.peer.rid, "newblock", block.hash) in self.retry_messages:
             del self.retry_messages[(stream.peer.rid, "newblock", block.hash)]
@@ -438,74 +476,50 @@ class NodeRPC(BaseRPC):
                     (peer_stream.peer.rid, "newtxn", txn.transaction_signature)
                 ] = payload
 
-    async def send_block_to_peers(self, block, max_concurrent=20):
-        self.config.app_log.info("Starting send_block_to_peers...")
-        semaphore = Semaphore(max_concurrent)
-        tasks = []
-
-        async def send_with_semaphore(peer_stream):
-            async with semaphore:
-                try:
-                    peer_id = getattr(peer_stream.peer, "rid", "Unknown")
-                    self.config.app_log.info(
-                        f"Processing peer: {peer_id}, block index: {block.index}"
-                    )
-
-                    if (
-                        hasattr(peer_stream.peer, "block")
-                        and peer_stream.peer.block.index > block.index + 100
-                    ):
-                        self.config.app_log.info(
-                            f"Skipping peer {peer_id} due to block height mismatch."
-                        )
-                        return
-
-                    await asyncio.wait_for(
-                        self.send_block_to_peer(block, peer_stream), timeout=10
-                    )
-
-                except asyncio.TimeoutError:
-                    self.config.app_log.warning(
-                        f"Timeout while sending block to peer {peer_id}."
-                    )
-                    await self.remove_peer(
-                        peer_stream, reason="Timeout during block sending"
-                    )
-                except asyncio.CancelledError:
-                    self.config.app_log.warning(
-                        f"CancelledError while sending block to peer {peer_id}."
-                    )
-                    await self.remove_peer(
-                        peer_stream, reason="CancelledError during block sending"
-                    )
-                except Exception as e:
-                    self.config.app_log.error(
-                        f"Error sending block to peer {peer_id}: {e}"
-                    )
-                    await self.remove_peer(peer_stream, reason=f"Error: {e}")
-
+    async def send_block_to_peers(self, block):
         async for peer_stream in self.config.peer.get_sync_peers():
-            tasks.append(send_with_semaphore(peer_stream))
+            peer_id = getattr(peer_stream.peer, "rid", "Unknown")
+            if (
+                hasattr(peer_stream.peer, "block")
+                and peer_stream.peer.block.index > block.index + 10
+            ):
+                self.config.app_log.info(
+                    f"⚠️ Skipping peer {peer_id} due to block height mismatch."
+                )
+                continue
 
-        await gather(*tasks, return_exceptions=True)
-        self.config.app_log.info("Finished send_block_to_peers.")
+            await self.send_block_to_peer(block, peer_stream)
+
+        self.config.app_log.info(f"✅ Finished sending block {block.index}")
 
     async def send_block_to_peer(self, block, peer_stream):
         payload = {"payload": {"block": block.to_dict()}}
         peer_id = getattr(peer_stream.peer, "rid", "Unknown")
+
         try:
+            self.config.app_log.info(
+                f"Sending block {block.index} to peer {peer_id} | Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
             await self.write_params(peer_stream, "newblock", payload)
+
             if peer_stream.peer.protocol_version > 1:
-                self.retry_messages[(peer_id, "newblock", block.hash)] = payload
+                self.retry_messages[(peer_stream.peer.rid, "newblock", block.hash)] = payload
+
         except Exception as e:
             self.config.app_log.error(
-                f"Error in send_block_to_peer for peer {peer_id}: {e}"
+                f"Error sending block {block.index} to peer {peer_id}: {e}"
             )
-            raise
 
-    async def get_next_block(self, block):
-        async for peer_stream in self.config.peer.get_sync_peers():
+    async def get_next_block(self, block, peer_stream):
+        """ We download another block, but only from a specific peer """
+        peer_id = getattr(peer_stream.peer, "rid", "Unknown")
+        self.config.app_log.info(f"🔍 Requesting next block {block.index + 1} from peer {peer_id}")
+
+        try:
             await self.write_params(peer_stream, "getblock", {"index": block.index + 1})
+        except Exception as e:
+            self.config.app_log.error(f"❌ Error requesting next block from peer {peer_id}: {e}")
+
 
     async def getblock(self, body, stream):
         # get blocks should be done only by syncing peers
@@ -839,7 +853,7 @@ class NodeRPC(BaseRPC):
                 )
             )
             await self.send_block_to_peer(self.config.LatestBlock.block, stream)
-            await self.get_next_block(self.config.LatestBlock.block)
+            await self.get_next_block(self.config.LatestBlock.block, stream)
         else:
             stream.close()
 
@@ -982,6 +996,8 @@ class NodeSocketClient(RPCSocketClient, NodeRPC):
             if not stream:
                 return
 
+            peer.connection_time = time.time()
+
             await self.write_params(
                 stream, "connect", {"peer": self.config.peer.to_dict()}
             )
@@ -1008,14 +1024,24 @@ class NodeSocketClient(RPCSocketClient, NodeRPC):
             return await self.remove_peer(
                 stream, reason="NodeSocketClient challenge: ensure_protocol_version"
             )
+
         try:
             params = body.get("params", {})
             challenge = params.get("token")
             signed_challenge = TU.generate_signature(challenge, self.config.private_key)
+
+            if "peer" in params:
+                peer_data = params["peer"]
+                if "node_version" in peer_data:
+                    stream.peer.node_version = tuple(peer_data["node_version"])
+                if "peer_type" in peer_data:
+                    stream.peer.peer_type = peer_data["peer_type"]
+
         except:
             return await self.remove_peer(
                 stream, reason="NodeSocketClient challenge: generate_signature"
             )
+
         if stream.peer.protocol_version > 1:
             await self.write_params(
                 stream,

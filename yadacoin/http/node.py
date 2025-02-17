@@ -15,6 +15,7 @@ Full license terms: see LICENSE.txt in this repository.
 Handlers required by the core chain operations
 """
 
+import os
 import json
 import time
 import tornado.web
@@ -443,6 +444,22 @@ class SubmitBlockHandler(BaseHandler):
             self.write({"status": "error", "message": str(e)})
             self.config.app_log.info(f"Failed to submit block: {e}")
 
+class LogHandler(BaseHandler):
+    async def get(self):
+        log_file_path = os.path.abspath("yada_app.log")
+
+        if not os.path.exists(log_file_path):
+            self.set_status(404)
+            self.write({"error": "Log file not found"})
+            return
+
+        with open(log_file_path, "r") as f:
+            logs = f.readlines()
+
+        last_logs = logs[-300:]
+
+        self.set_header("Content-Type", "text/plain")
+        self.write("".join(last_logs))
 
 NODE_HANDLERS = [
     (r"/get-latest-block", GetLatestBlockHandler),
@@ -465,4 +482,5 @@ NODE_HANDLERS = [
     (r"/get-monitoring", GetMonitoringHandler),
     (r"/get-block-template", GetBlockTemplateHandler),
     (r"/submitblock", SubmitBlockHandler),
+    (r"/get-logs", LogHandler),
 ]

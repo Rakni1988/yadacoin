@@ -13,6 +13,8 @@ Full license terms: see LICENSE.txt in this repository.
 
 import hashlib
 import json
+import random
+import socket
 import time
 from collections import OrderedDict
 from logging import getLogger
@@ -30,6 +32,7 @@ class Peer:
     """An individual Peer object"""
     epoch = 1602914018
     ttl = 259200
+    dead_peers_dns = {}
 
     def __init__(
         self,
@@ -44,6 +47,7 @@ class Peer:
         protocol_version=3,
         node_version=(0, 0, 0),
         peer_type=None,
+        connection_time=None,
     ):
         self.host = host
         self.port = port
@@ -59,6 +63,7 @@ class Peer:
         self.authenticated = False
         self.node_version = tuple([int(x) for x in node_version])
         self.peer_type = peer_type
+        self.connection_time = connection_time
 
     @staticmethod
     def my_peer():
@@ -133,6 +138,7 @@ class Peer:
             protocol_version=peer.get("protocol_version", 1),
             node_version=peer.get("node_version", (0, 0, 0)),
             peer_type=peer.get("peer_type"),
+            connection_time = peer.get("connection_time", time.time()),
         )
         return inst
 
@@ -245,6 +251,7 @@ class Peer:
         }
         if not peers:
             return
+
         outbound_class = await self.get_outbound_class()
         limit = self.__class__.type_limit(outbound_class)
 
@@ -254,37 +261,57 @@ class Peer:
             **self.config.nodeServer.inbound_streams[outbound_class.__name__],
             **self.config.nodeServer.inbound_pending[outbound_class.__name__],
         }
+
         outbound_ignored = {
             self.config.peer.identity.generate_rid(k): v
-            for k, v in self.config.nodeClient.outbound_ignore[
-                outbound_class.__name__
-            ].items()
-            if (time.time() - v) < 120
+            for k, v in self.config.nodeClient.outbound_ignore[outbound_class.__name__].items()
+            if (time.time() - v) < 300
         }
-        await self.connect(
-            stream_collection,
-            limit,
-            peers,
-            outbound_ignored,
-        )
 
-    async def connect(self, stream_collection, limit, peers, ignored_peers):
-        if limit and len(stream_collection) < limit:
-            for i, peer in enumerate(
-                set(peers) - set(stream_collection) - set(ignored_peers)
-            ):
-                if i >= limit:
-                    break
-                tornado.ioloop.IOLoop.current().spawn_callback(
-                    self.config.nodeClient.connect, peers[peer]
-                )
+        # 🔹 Jeśli mamy już limit połączeń, przerywamy
+        if limit and len(stream_collection) >= limit:
+            self.config.app_log.info(f"🔹 Peer limit reached ({len(stream_collection)}/{limit}). Skipping connection attempts.")
+            return
+
+        # 🔹 Lista dostępnych peerów (odrzucamy tych, którzy są w stream_collection, ignored lub martwych)
+        available_peers = list(set(peers) - set(stream_collection) - set(outbound_ignored) - set(Peer.dead_peers_dns.keys()))
+
+        # 🔹 Miksujemy kolejność
+        random.shuffle(available_peers)
+
+        # 🔹 Filtrujemy peerów, którzy mają nieistniejący DNS
+        filtered_peers = []
+        for peer_rid in available_peers:
+            peer = peers[peer_rid]
+            try:
+                socket.gethostbyname(peer.host)
+                filtered_peers.append(peer)
+            except socket.gaierror:
+                self.config.app_log.warning(f"⚠️ Skipping peer {peer.host}, DNS resolution failed.")
+                Peer.dead_peers_dns[peer_rid] = time.time()  # 🔹 Dodajemy do listy martwych peerów
+
+        # 🔹 Usuwamy peerów, którzy są w cache dłużej niż 10 minut (600 sek)
+        Peer.dead_peers_dns = {rid: ts for rid, ts in Peer.dead_peers_dns.items() if (time.time() - ts) < 3600}
+
+        # 🔹 Liczba brakujących połączeń
+        missing_peers = limit - len(stream_collection)
+
+        # 🔹 Dobieramy tylko tyle peerów, ile brakuje do pełnego limitu
+        for peer in filtered_peers[:missing_peers]:
+            tornado.ioloop.IOLoop.current().spawn_callback(self.config.nodeClient.connect, peer)
+
+        self.config.app_log.info(f"🔹 Attempting to connect {len(filtered_peers[:missing_peers])} new peers.")
 
     @staticmethod
     async def is_synced():
         streams = await Config().peer.get_outbound_streams()
+        
+        if not streams:
+            return True
+        
         for stream in streams:
             if not stream.synced:
-                return True
+                return False
         return True
 
     def to_dict(self):
@@ -301,7 +328,15 @@ class Peer:
             "protocol_version": self.protocol_version,
             "node_version": self.node_version,
             "peer_type": self.peer_type,
+            "connection_duration": self.format_duration(int(time.time() - self.connection_time)) if self.connection_time else "Unknown"
         }
+
+    def format_duration(self, seconds):
+        days = seconds // 86400
+        hours = (seconds % 86400) // 3600
+        minutes = (seconds % 3600) // 60
+        seconds = seconds % 60
+        return f"{days}d {hours:02d}:{minutes:02d}:{seconds:02d}"
 
     def to_string(self):
         return "{}:{}".format(self.host, self.port)
@@ -671,7 +706,7 @@ class ServiceProvider(Peer):
     @classmethod
     def type_limit(cls, peer):
         if peer == SeedGateway:
-            return 1
+            return 0
         elif peer in [User, Pool]:
             return Config().max_peers or 100000
         else:
@@ -868,7 +903,7 @@ class User(Peer):
     @classmethod
     def type_limit(cls, peer):
         if peer == ServiceProvider:
-            return 1
+            return 3
         elif peer == User:
             return Config().max_peers or 100000
         else:

@@ -173,9 +173,7 @@ class TU(object):  # Transaction Utilities
         )
 
         to_delete = []
-        txns_to_clean = config.mongo.async_db.miner_transactions.find(
-            {"time": {"$gte": config.last_mempool_clean}}
-        )
+        txns_to_clean = config.mongo.async_db.miner_transactions.find({})
         async for txn_to_clean in txns_to_clean:
             for x in txn_to_clean.get("inputs"):
                 if await config.BU.is_input_spent(x["id"], txn_to_clean["public_key"]):
@@ -185,7 +183,7 @@ class TU(object):  # Transaction Utilities
                             "txn": txn_to_clean,
                         }
                     )
-                    continue
+                    break  # No need to check further inputs for this transaction
             if await config.mongo.async_db.blocks.find_one(
                 {"transactions.id": txn_to_clean["id"]}
             ):

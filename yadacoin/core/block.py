@@ -448,19 +448,11 @@ class Block(object):
         txns, transaction_objs, used_sigs, used_inputs, index, xtime
     ):
         config = Config()
-        BLOCKED_PUBLIC_KEYS = {
-            "02fd3ad0e7a613672d9927336d511916e15c507a1fab225ed048579e9880f15fed",
-        }
         for transaction_obj in txns:
             try:
                 if transaction_obj.transaction_signature in used_sigs:
                     raise InvalidTransactionException(
                         "duplicate transaction found and removed"
-                    )
-
-                if transaction_obj.public_key in BLOCKED_PUBLIC_KEYS:
-                    raise InvalidTransactionException(
-                        "Transaction from banned entity (Xeggex) detected and rejected."
                     )
 
                 check_max_inputs = False

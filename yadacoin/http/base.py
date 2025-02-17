@@ -37,7 +37,7 @@ class BaseHandler(RequestHandler):
             origin = origin[:-1]
         self.app_log = logging.getLogger("tornado.application")
         # Check if the request is not for /get-block-template or /api-stats
-        if self.request.uri not in ["/get-block-template", "/api-stats"]:
+        if self.request.uri not in ["/get-block-template", "/api-stats", "/get-logs", "/get-peers", "/get-status"]:
             self.app_log.info(self._request_summary())
         self.config = Config()
         self.yadacoin_vars = self.settings["yadacoin_vars"]
