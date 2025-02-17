@@ -268,18 +268,14 @@ class Peer:
             if (time.time() - v) < 300
         }
 
-        # 🔹 Jeśli mamy już limit połączeń, przerywamy
         if limit and len(stream_collection) >= limit:
             self.config.app_log.info(f"🔹 Peer limit reached ({len(stream_collection)}/{limit}). Skipping connection attempts.")
             return
 
-        # 🔹 Lista dostępnych peerów (odrzucamy tych, którzy są w stream_collection, ignored lub martwych)
         available_peers = list(set(peers) - set(stream_collection) - set(outbound_ignored) - set(Peer.dead_peers_dns.keys()))
 
-        # 🔹 Miksujemy kolejność
         random.shuffle(available_peers)
 
-        # 🔹 Filtrujemy peerów, którzy mają nieistniejący DNS
         filtered_peers = []
         for peer_rid in available_peers:
             peer = peers[peer_rid]
@@ -288,15 +284,12 @@ class Peer:
                 filtered_peers.append(peer)
             except socket.gaierror:
                 self.config.app_log.warning(f"⚠️ Skipping peer {peer.host}, DNS resolution failed.")
-                Peer.dead_peers_dns[peer_rid] = time.time()  # 🔹 Dodajemy do listy martwych peerów
+                Peer.dead_peers_dns[peer_rid] = time.time()
 
-        # 🔹 Usuwamy peerów, którzy są w cache dłużej niż 10 minut (600 sek)
         Peer.dead_peers_dns = {rid: ts for rid, ts in Peer.dead_peers_dns.items() if (time.time() - ts) < 3600}
 
-        # 🔹 Liczba brakujących połączeń
         missing_peers = limit - len(stream_collection)
 
-        # 🔹 Dobieramy tylko tyle peerów, ile brakuje do pełnego limitu
         for peer in filtered_peers[:missing_peers]:
             tornado.ioloop.IOLoop.current().spawn_callback(self.config.nodeClient.connect, peer)
 
