@@ -181,8 +181,9 @@ class RPCSocketServer(TCPServer, BaseRPC):
                 self.config.health.tcp_server.last_activity = time.time()
 
                 if not data.strip():
-                    self.config.app_log.info(f"🔄 KeepAlive received from {address}. Connection is active.")
-                    continue
+                    self.config.app_log.warning(f"⚠️ Received empty data from {address}, closing connection.")
+                    await self.remove_peer(stream, reason="Received empty data")
+                    break
 
                 try:
                     body = json.loads(data)
@@ -330,13 +331,12 @@ class RPCSocketClient(TCPClient):
                 peer.host, peer.port, timeout=timedelta(seconds=1)
             )
 
-            stream.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            if hasattr(socket, "TCP_KEEPIDLE"):
-                stream.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
-            if hasattr(socket, "TCP_KEEPINTVL"):
-                stream.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 15)
-            if hasattr(socket, "TCP_KEEPCNT"):
-                stream.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
+            sock = stream.socket
+            if sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 15)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
 
             stream.synced = False
             stream.syncing = False
@@ -437,9 +437,6 @@ class RPCSocketClient(TCPClient):
         while True:
             try:
                 body = json.loads(await stream.read_until(b"\n"))
-                self.config.health.tcp_client.last_activity = time.time()
-                stream.last_activity = int(time.time())
-
                 if "result" in body:
                     if body["method"] in REQUEST_RESPONSE_MAP:
                         if body["id"] in stream.message_queue.get(
@@ -458,7 +455,8 @@ class RPCSocketClient(TCPClient):
                         )
                 else:
                     stream.close()
-
+                self.config.health.tcp_client.last_activity = time.time()
+                stream.last_activity = int(time.time())
                 await getattr(self, body.get("method"))(body, stream)
             except StreamClosedError:
                 await self.remove_peer(stream)
