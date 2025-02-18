@@ -11,6 +11,7 @@ For commercial license inquiries, contact: info@yadacoin.io
 Full license terms: see LICENSE.txt in this repository.
 """
 
+import asyncio
 import base64
 import json
 import socket
@@ -30,6 +31,7 @@ from yadacoin.core.config import Config
 REQUEST_RESPONSE_MAP = {
     "blockresponse": "getblock",
     "blocksresponse": "getblocks",
+    "keepalive": "keepalive",
 }
 
 REQUEST_ONLY = [
@@ -160,16 +162,6 @@ class RPCSocketServer(TCPServer, BaseRPC):
     config = None
 
     async def handle_stream(self, stream, address):
-        stream.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-
-        # OPTIONAL: Adjust keepalive settings if needed
-        if hasattr(socket, "TCP_KEEPIDLE"):
-            stream.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
-        if hasattr(socket, "TCP_KEEPINTVL"):
-            stream.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 15)
-        if hasattr(socket, "TCP_KEEPCNT"):
-            stream.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
-
         stream.synced = False
         stream.syncing = False
         stream.message_queue = {}
@@ -251,6 +243,15 @@ class RPCSocketServer(TCPServer, BaseRPC):
                 self.config.app_log.warning(f"⚠️ Received raw data: {data[:100]}")
                 break
 
+    async def keepalive(self, body, stream):
+
+        stream.last_activity = int(time.time())
+        self.config.health.tcp_server.last_activity = time.time()
+        self.config.app_log.info(f"✅ KeepAlive received from {stream.peer.host}. Connection is active.")
+        
+        await self.write_result(stream, "keepalive", {"ok": True})
+
+
     async def remove_peer(self, stream, close=True, reason=None):
         if reason:
             await self.write_params(stream, "disconnect", {"reason": reason})
@@ -330,13 +331,6 @@ class RPCSocketClient(TCPClient):
             stream = await super(RPCSocketClient, self).connect(
                 peer.host, peer.port, timeout=timedelta(seconds=1)
             )
-
-            sock = stream.socket
-            if sock:
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 15)
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
 
             stream.synced = False
             stream.syncing = False
@@ -434,6 +428,7 @@ class RPCSocketClient(TCPClient):
             self.config.app_log.warning("{}".format(format_exc()))
 
     async def wait_for_data(self, stream):
+        await asyncio.create_task(self.send_keepalive(stream))
         while True:
             try:
                 body = json.loads(await stream.read_until(b"\n"))
@@ -473,6 +468,22 @@ class RPCSocketClient(TCPClient):
                     stream, reason="RPCSocketClient: unhandled exception 3"
                 )
                 self.config.app_log.warning("{}".format(format_exc()))
+                break
+
+    async def send_keepalive(self, stream):
+        while True:
+            await asyncio.sleep(60)
+            try:
+                self.config.app_log.info(f"📡 Sending KeepAlive to {stream.peer.host}")
+                response = await self.write_params(stream, "keepalive", {"timestamp": int(time.time())})
+
+                if response.get("ok"):
+                    stream.last_activity = int(time.time())
+                    self.config.health.tcp_client.last_activity = time.time()
+                    self.config.app_log.info(f"✅ KeepAlive acknowledged by {stream.peer.host}")
+
+            except Exception as e:
+                self.config.app_log.warning(f"⚠️ Failed to send KeepAlive to {stream.peer.host}: {e}")
                 break
 
     async def remove_peer(self, stream, close=True, reason=None):
