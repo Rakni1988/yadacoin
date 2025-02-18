@@ -244,13 +244,11 @@ class RPCSocketServer(TCPServer, BaseRPC):
                 break
 
     async def keepalive(self, body, stream):
-
         stream.last_activity = int(time.time())
         self.config.health.tcp_server.last_activity = time.time()
         self.config.app_log.info(f"✅ KeepAlive received from {stream.peer.host}. Connection is active.")
-        
-        await self.write_result(stream, "keepalive", {"ok": True})
 
+        await self.write_result(stream, "keepalive", {"ok": True}, body["id"])
 
     async def remove_peer(self, stream, close=True, reason=None):
         if reason:
@@ -428,10 +426,16 @@ class RPCSocketClient(TCPClient):
             self.config.app_log.warning("{}".format(format_exc()))
 
     async def wait_for_data(self, stream):
-        await asyncio.create_task(self.send_keepalive(stream))
         while True:
             try:
                 body = json.loads(await stream.read_until(b"\n"))
+
+                if body.get("method") == "keepalive":
+                    self.config.health.tcp_client.last_activity = time.time()
+                    stream.last_activity = int(time.time())
+                    self.config.app_log.info(f"✅ KeepAlive response received from {stream.peer.host}")
+                    continue
+
                 if "result" in body:
                     if body["method"] in REQUEST_RESPONSE_MAP:
                         if body["id"] in stream.message_queue.get(
@@ -472,15 +476,11 @@ class RPCSocketClient(TCPClient):
 
     async def send_keepalive(self, stream):
         while True:
-            await asyncio.sleep(60)
+            await asyncio.sleep(90)
+
             try:
                 self.config.app_log.info(f"📡 Sending KeepAlive to {stream.peer.host}")
-                response = await self.write_params(stream, "keepalive", {"timestamp": int(time.time())})
-
-                if response.get("ok"):
-                    stream.last_activity = int(time.time())
-                    self.config.health.tcp_client.last_activity = time.time()
-                    self.config.app_log.info(f"✅ KeepAlive acknowledged by {stream.peer.host}")
+                await self.write_params(stream, "keepalive", {"timestamp": int(time.time())})
 
             except Exception as e:
                 self.config.app_log.warning(f"⚠️ Failed to send KeepAlive to {stream.peer.host}: {e}")
