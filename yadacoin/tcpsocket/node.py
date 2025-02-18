@@ -11,6 +11,7 @@ For commercial license inquiries, contact: info@yadacoin.io
 Full license terms: see LICENSE.txt in this repository.
 """
 
+import asyncio
 import base64
 import time
 import socket
@@ -532,7 +533,8 @@ class NodeRPC(BaseRPC):
             )
 
     async def get_next_block(self, block, peer_stream):
-        """ We download another block, but only from a specific peer """
+        """ We should get another block, but only from a specific peer """
+
         peer_id = getattr(peer_stream.peer, "rid", "Unknown")
         self.config.app_log.info(f"🔍 Requesting next block {block.index + 1} from peer {peer_id}")
 
@@ -540,7 +542,6 @@ class NodeRPC(BaseRPC):
             await self.write_params(peer_stream, "getblock", {"index": block.index + 1})
         except Exception as e:
             self.config.app_log.error(f"❌ Error requesting next block from peer {peer_id}: {e}")
-
 
     async def getblock(self, body, stream):
         # get blocks should be done only by syncing peers
@@ -1029,6 +1030,8 @@ class NodeSocketClient(RPCSocketClient, NodeRPC):
                 "challenge",
                 {"peer": self.config.peer.to_dict(), "token": stream.peer.token},
             )
+
+            asyncio.create_task(self.send_keepalive(stream))
 
             await self.wait_for_data(stream)
         except StreamClosedError:
