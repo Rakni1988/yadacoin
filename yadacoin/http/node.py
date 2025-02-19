@@ -250,8 +250,17 @@ class GetMempoolTransactionsHandler(BaseHandler):
 
             for transaction in transactions:
                 transaction_obj = Transaction.ensure_instance(transaction)
+
+                # 🔍 POMIJAMY transakcje z 'prerotated_key_hash'
+                if hasattr(transaction_obj, "prerotated_key_hash") and transaction_obj.prerotated_key_hash:
+                    self.config.app_log.info(
+                        f"⏩ Skipping transaction with prerotated_key_hash: {transaction_obj.transaction_signature}"
+                    )
+                    continue  # 🚨 NIE przekazujemy do poola
+
                 valid_transactions.append(transaction_obj)
 
+            # ✅ Walidacja pozostałych transakcji
             await Block.validate_transactions(
                 valid_transactions, transaction_objs, used_sigs, used_inputs, index, xtime
             )
@@ -260,6 +269,7 @@ class GetMempoolTransactionsHandler(BaseHandler):
 
         except Exception as e:
             self.render_as_json({"error": str(e)}, status=500)
+
 
 
 class RebroadcastTransactions(BaseHandler):
