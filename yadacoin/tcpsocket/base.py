@@ -596,6 +596,10 @@ class RPCSocketClient(TCPClient):
         while True:
             await asyncio.sleep(90)
 
+            if stream.closed():
+                self.config.app_log.warning(f"⚠️ Stream to {stream.peer.host} is closed. Stopping KeepAlive.")
+                break
+
             try:
                 self.config.app_log.info(f"📡 Sending KeepAlive to {stream.peer.host}")
                 await self.write_params(stream, "keepalive", {"timestamp": int(time.time())})
