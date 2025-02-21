@@ -164,21 +164,18 @@ class NodeRPC(BaseRPC):
             self.config.app_log.info("newtxn, no payload")
             return
 
-        txn_id = txn.transaction_signature  # Optymalizujemy ID transakcji
+        txn_id = txn.transaction_signature
 
-        # **Zawsze odpowiadamy confirmem**
         if stream.peer.protocol_version > 2:
             await self.write_result(
-                stream, "newtxn_confirmed", {"status": "received", "id": txn_id}, body["id"]
+                stream, "newtxn_confirmed", {"transaction_id": txn.transaction_signature}, body["id"]
             )
 
-        # **1️⃣ Sprawdzamy, czy transakcja już istnieje w mempool**
         existing_txn = await self.config.mongo.async_db.miner_transactions.find_one({"id": txn_id})
         if existing_txn:
             self.config.app_log.warning(f"Transaction {txn_id} already in mempool! Ignoring.")
             return
 
-        # **2️⃣ Sprawdzamy, czy public_key + input.id są w mempool**
         for input_item in txn.inputs:
             existing_input_txn = await self.config.mongo.async_db.miner_transactions.find_one(
                 {"public_key": txn.public_key, "inputs.id": input_item.id}
@@ -327,20 +324,20 @@ class NodeRPC(BaseRPC):
     async def newtxn_confirmed(self, body, stream):
         self.config.app_log.info(f"🔄 Received newtxn_confirmed: {body}")
 
-        msg_id = body.get("id")  # Bierzemy tylko ID wiadomości
+        txn_id = body.get("result", {}).get("transaction_id")
 
-        if not msg_id:
-            self.config.app_log.warning("⚠️ newtxn_confirmed received without an ID!")
+        if not txn_id:
+            self.config.app_log.warning("⚠️ newtxn_confirmed received without a transaction ID!")
             return
 
-        retry_key = (stream.peer.rid, "newtxn", msg_id)
+        retry_key = (stream.peer.rid, "newtxn", txn_id)
         if retry_key in self.retry_messages:
             del self.retry_messages[retry_key]
 
         self.confirmed_peers.add(retry_key)
 
         self.config.app_log.info(
-            f"🔹 Transaction confirmation received for message ID {msg_id} from peer {stream.peer.rid}."
+            f"✅ Transaction {txn_id} confirmed by peer {stream.peer.rid}. Peer added to confirmed list."
         )
 
     async def newblock(self, body, stream):
