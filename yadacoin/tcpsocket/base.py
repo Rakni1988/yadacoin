@@ -246,7 +246,7 @@ class RPCSocketServer(TCPServer, BaseRPC):
     async def keepalive(self, body, stream):
         stream.last_activity = int(time.time())
         self.config.health.tcp_server.last_activity = time.time()
-        self.config.app_log.info(f"✅ KeepAlive received from {stream.peer.host}. Connection is active.")
+        self.config.app_log.debug(f"✅ KeepAlive received from {stream.peer.host}. Connection is active.")
 
         await self.write_result(stream, "keepalive", {"ok": True}, body["id"])
 
@@ -478,8 +478,12 @@ class RPCSocketClient(TCPClient):
         while True:
             await asyncio.sleep(90)
 
+            if stream.closed():
+                self.config.app_log.warning(f"⚠️ Stream to {stream.peer.host} is closed. Stopping KeepAlive.")
+                break
+
             try:
-                self.config.app_log.info(f"📡 Sending KeepAlive to {stream.peer.host}")
+                self.config.app_log.debug(f"📡 Sending KeepAlive to {stream.peer.host}")
                 await self.write_params(stream, "keepalive", {"timestamp": int(time.time())})
 
             except Exception as e:

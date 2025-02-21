@@ -350,7 +350,7 @@ class NodeRPC(BaseRPC):
         block_hash = payload["block"].get("hash")
 
         self.config.app_log.info(
-            f"Received new block {block_index} | Hash: {block_hash} | Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+            f"📥 Received new block {block_index} | Hash: {block_hash} | Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
         existing_block = await self.config.mongo.async_db.blocks.find_one(
@@ -363,7 +363,10 @@ class NodeRPC(BaseRPC):
             )
             if stream.peer.protocol_version > 1:
                 await self.config.nodeShared.write_result(
-                    stream, "newblock_confirmed", body.get("params", {}), body["id"]
+                    stream,
+                    "newblock_confirmed",
+                    {"block_hash": block_hash, "block_index": block_index},  # TYLKO HASH i INDEX
+                    body["id"]
                 )
             return
 
@@ -373,19 +376,21 @@ class NodeRPC(BaseRPC):
 
         if stream.peer.protocol_version > 1:
             await self.config.nodeShared.write_result(
-                stream, "newblock_confirmed", body.get("params", {}), body["id"]
+                stream,
+                "newblock_confirmed",
+                {"block_hash": block_hash, "block_index": block_index},
+                body["id"]
             )
 
     async def newblock_confirmed(self, body, stream):
-        payload = body.get("result", {}).get("payload")
-        block = await Block.from_dict(payload.get("block"))
+        payload = body.get("result", {})
+        block_hash = payload.get("block_hash")
+        block_index = payload.get("block_index")
 
-        self.config.app_log.info(
-            f"✅ Block {block.index} confirmed "
-        )
+        self.config.app_log.info(f"✅ Block {block_index} confirmed | Hash: {block_hash}")
 
-        if (stream.peer.rid, "newblock", block.hash) in self.retry_messages:
-            del self.retry_messages[(stream.peer.rid, "newblock", block.hash)]
+        if (stream.peer.rid, "newblock", block_hash) in self.retry_messages:
+            del self.retry_messages[(stream.peer.rid, "newblock", block_hash)]
 
     async def ensure_previous_block(self, block, stream):
         have_prev = await self.ensure_previous_on_blockchain(block)
