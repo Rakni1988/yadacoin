@@ -151,32 +151,47 @@ class NodeRPC(BaseRPC):
                 await peer_stream.write_params("service_provider_request", payload2)
 
     async def newtxn(self, body, stream):
+        self.config.app_log.info(f"📥 Received newtxn: {body}")
         payload = body.get("params", {})
         transaction = payload.get("transaction")
+        txn = None
+
         if transaction:
             txn = Transaction.from_dict(transaction)
-            if stream.peer.protocol_version > 2:
-                await self.write_result(
-                    stream, "newtxn_confirmed", body.get("params", {}), body["id"]
-                )
         elif payload.get("hash"):
             txn = Transaction.from_dict(payload)
-            if stream.peer.protocol_version > 2:
-                await self.write_result(
-                    stream,
-                    "newtxn_confirmed",
-                    {"transaction": body.get("params", {})},
-                    body["id"],
-                )
         else:
             self.config.app_log.info("newtxn, no payload")
             return
 
+        txn_id = txn.transaction_signature  # Optymalizujemy ID transakcji
+
+        # **Zawsze odpowiadamy confirmem**
+        if stream.peer.protocol_version > 2:
+            await self.write_result(
+                stream, "newtxn_confirmed", {"status": "received", "id": txn_id}, body["id"]
+            )
+
+        # **1️⃣ Sprawdzamy, czy transakcja już istnieje w mempool**
+        existing_txn = await self.config.mongo.async_db.miner_transactions.find_one({"id": txn_id})
+        if existing_txn:
+            self.config.app_log.warning(f"Transaction {txn_id} already in mempool! Ignoring.")
+            return
+
+        # **2️⃣ Sprawdzamy, czy public_key + input.id są w mempool**
+        for input_item in txn.inputs:
+            existing_input_txn = await self.config.mongo.async_db.miner_transactions.find_one(
+                {"public_key": txn.public_key, "inputs.id": input_item.id}
+            )
+            if existing_input_txn:
+                self.config.app_log.warning(f"Duplicate transaction detected for {txn_id}! Ignoring.")
+                return
+
         self.newtxn_tracker.by_host[stream.peer.host] = (
             self.newtxn_tracker.by_host.get(stream.peer.host, 0) + 1
         )
-        self.newtxn_tracker.by_txn_id[txn.transaction_signature] = (
-            self.newtxn_tracker.by_txn_id.get(txn.transaction_signature, 0) + 1
+        self.newtxn_tracker.by_txn_id[txn_id] = (
+            self.newtxn_tracker.by_txn_id.get(txn_id, 0) + 1
         )
 
         self.config.processing_queues.transaction_queue.add(
@@ -310,23 +325,22 @@ class NodeRPC(BaseRPC):
                 ] = {"transaction": txn.to_dict()}
 
     async def newtxn_confirmed(self, body, stream):
-        result = body.get("result", {})
-        transaction = Transaction.from_dict(result.get("transaction"))
+        self.config.app_log.info(f"🔄 Received newtxn_confirmed: {body}")
 
-        if (
-            stream.peer.rid,
-            "newtxn",
-            transaction.transaction_signature,
-        ) in self.retry_messages:
-            del self.retry_messages[
-                (stream.peer.rid, "newtxn", transaction.transaction_signature)
-            ]
+        msg_id = body.get("id")  # Bierzemy tylko ID wiadomości
 
-        self.confirmed_peers.add(
-            (stream.peer.rid, "newtxn", transaction.transaction_signature)
-        )
-        self.config.app_log.debug(
-            f"Transaction {transaction.transaction_signature} confirmed by peer {stream.peer.rid}. Peer added to the list of confirmed peers."
+        if not msg_id:
+            self.config.app_log.warning("⚠️ newtxn_confirmed received without an ID!")
+            return
+
+        retry_key = (stream.peer.rid, "newtxn", msg_id)
+        if retry_key in self.retry_messages:
+            del self.retry_messages[retry_key]
+
+        self.confirmed_peers.add(retry_key)
+
+        self.config.app_log.info(
+            f"🔹 Transaction confirmation received for message ID {msg_id} from peer {stream.peer.rid}."
         )
 
     async def newblock(self, body, stream):
