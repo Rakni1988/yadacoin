@@ -354,16 +354,18 @@ class NodeRPC(BaseRPC):
         )
 
     async def newblock(self, body, stream):
+        self.config.app_log.info(f"[NEW_BLOCK] Received newblock: {body}")
+
         payload = body.get("params", {}).get("payload", {})
         if not payload.get("block"):
-            self.config.app_log.info("⚠️ Received `newblock`, but no payload")
+            self.config.app_log.info("[NEW_BLOCK] No block payload received")
             return
 
         block_index = payload["block"].get("index")
         block_hash = payload["block"].get("hash")
 
         self.config.app_log.info(
-            f"📥 Received new block {block_index} | Hash: {block_hash} | Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+            f"[NEW_BLOCK] Received new block {block_index} | Hash: {block_hash} | Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
         existing_block = await self.config.mongo.async_db.blocks.find_one(
@@ -371,14 +373,17 @@ class NodeRPC(BaseRPC):
         )
 
         if existing_block:
-            self.config.app_log.info(
-                f"⚠️ Block {block_index} already exists in DB, skipping processing."
-            )
+            self.config.app_log.info(f"[NEW_BLOCK] Block {block_index} already exists in DB, skipping processing.")
             if stream.peer.protocol_version > 1:
+                confirm_message = {
+                    "block_hash": block_hash,
+                    "block_index": block_index
+                }
+                self.config.app_log.info(f"[NEW_BLOCK] Sending confirmation: {confirm_message}")
                 await self.config.nodeShared.write_result(
                     stream,
                     "newblock_confirmed",
-                    {"block_hash": block_hash, "block_index": block_index},
+                    confirm_message,
                     body["id"]
                 )
             return
@@ -388,19 +393,34 @@ class NodeRPC(BaseRPC):
         )
 
         if stream.peer.protocol_version > 1:
+            confirm_message = {
+                "block_hash": block_hash,
+                "block_index": block_index
+            }
+            self.config.app_log.info(f"[NEW_BLOCK] Sending confirmation: {confirm_message}")
             await self.config.nodeShared.write_result(
                 stream,
                 "newblock_confirmed",
-                {"block_hash": block_hash, "block_index": block_index},
+                confirm_message,
                 body["id"]
             )
 
     async def newblock_confirmed(self, body, stream):
+        """
+        Handles block confirmation messages received from peer nodes.
+
+        - Extracts block hash and index from the response.
+        - Removes the corresponding entry from the retry queue if it was pending.
+
+        This method improves synchronization and prevents redundant retry attempts.
+        """
+        self.config.app_log.info(f"[NEW_BLOCK_CONFIRM] Received confirmation: {body}")
+
         payload = body.get("result", {})
         block_hash = payload.get("block_hash")
         block_index = payload.get("block_index")
 
-        self.config.app_log.info(f"✅ Block {block_index} confirmed | Hash: {block_hash}")
+        self.config.app_log.info(f"[NEW_BLOCK_CONFIRM] Block {block_index} confirmed | Hash: {block_hash}")
 
         if (stream.peer.rid, "newblock", block_hash) in self.retry_messages:
             del self.retry_messages[(stream.peer.rid, "newblock", block_hash)]
