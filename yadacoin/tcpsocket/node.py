@@ -165,51 +165,25 @@ class NodeRPC(BaseRPC):
             self.config.app_log.info("newtxn, no payload")
             return
 
-        # Check if transaction already exists in a block
-        existing_block_txn = await self.config.mongo.async_db.blocks.find_one(
-            {"transactions.id": txn.transaction_signature},
-            {"index": 1}
-        )
-        
-        if existing_block_txn:
-            block_index = existing_block_txn["index"]
-            self.config.app_log.warning(f"Transaction already exists in block {block_index}. Ignoring.")
-            if stream.peer.protocol_version > 2:
-                await self.write_result(
-                    stream, "newtxn_confirmed", {"status": "exists", "block": block_index}, body["id"]
-                )
-            return
-
-        # Check transaction timestamp
-        current_time = time.time()
-        txn_time = txn.time
-        time_diff = current_time - txn_time
-
-        if time_diff > 7200:  # 2 hours in seconds
-            self.config.app_log.warning(f"Outdated transaction detected!")
-            if stream.peer.protocol_version > 2:
-                await self.write_result(
-                    stream, "newtxn_confirmed", body.get("params", {}), body["id"]
-                )
-            return
-
-        # Checking for duplicates in mempool based on (public_key, inputs.id)
-        for input_item in txn.inputs:
-            existing_txn = await self.config.mongo.async_db.miner_transactions.find_one(
-                {"public_key": txn.public_key, "inputs.id": input_item.id}
-            )
-            if existing_txn:
-                self.config.app_log.warning(f"Duplicate transaction detected!")
-                if stream.peer.protocol_version > 2:
-                    await self.write_result(
-                        stream, "newtxn_confirmed", body.get("params", {}), body["id"]
-                    )
-                return
+        txn_id = txn.transaction_signature
 
         if stream.peer.protocol_version > 2:
             await self.write_result(
                 stream, "newtxn_confirmed", body.get("params", {}), body["id"]
             )
+
+        existing_txn = await self.config.mongo.async_db.miner_transactions.find_one({"id": txn_id})
+        if existing_txn:
+            self.config.app_log.warning(f"Transaction {txn_id} already in mempool! Ignoring.")
+            return
+
+        input_ids = [input_item.id for input_item in txn.inputs]
+        existing_input_txn = await self.config.mongo.async_db.miner_transactions.find_one(
+            {"public_key": txn.public_key, "inputs.id": {"$in": input_ids}}
+        )
+        if existing_input_txn:
+            self.config.app_log.warning(f"Duplicate transaction detected for {txn_id}! Ignoring.")
+            return
 
         if (
             self.config.LatestBlock.block.index >= CHAIN.XEGGEX_HACK_FORK
@@ -235,8 +209,8 @@ class NodeRPC(BaseRPC):
         self.newtxn_tracker.by_host[stream.peer.host] = (
             self.newtxn_tracker.by_host.get(stream.peer.host, 0) + 1
         )
-        self.newtxn_tracker.by_txn_id[txn.transaction_signature] = (
-            self.newtxn_tracker.by_txn_id.get(txn.transaction_signature, 0) + 1
+        self.newtxn_tracker.by_txn_id[txn_id] = (
+            self.newtxn_tracker.by_txn_id.get(txn_id, 0) + 1
         )
 
         self.config.processing_queues.transaction_queue.add(
@@ -403,7 +377,7 @@ class NodeRPC(BaseRPC):
         )
 
         if existing_block:
-            self.config.app_log.info(
+            self.config.app_log.warning(
                 f"⚠️ Block {block_index} already exists in DB, skipping processing."
             )
             if stream.peer.protocol_version > 1:
