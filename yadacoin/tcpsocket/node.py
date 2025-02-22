@@ -562,30 +562,33 @@ class NodeRPC(BaseRPC):
                 ] = {}
 
     async def blocksresponse(self, body, stream):
-        # get blocks should be done only by syncing peers
+        self.config.app_log.info(f"[BLOCKSRESPONSE] Received blocksresponse: 100 BLOCKS")
+
         result = body.get("result")
         blocks = result.get("blocks")
-        if stream.peer.protocol_version > 1:
-            start_index = body.get("result", {}).get("start_index", None)
-            
-            self.config.app_log.info(f"📤 Sending blocksresponse_confirmed: start_index={start_index}")
+        start_index = result.get("start_index", None)
 
+        if stream.peer.protocol_version > 1:
+            confirm_message = {"start_index": start_index}
+            self.config.app_log.info(f"[BLOCKSRESPONSE] Sending confirmation: {confirm_message}")
             await self.write_result(
-                stream, "blocksresponse_confirmed", {"start_index": start_index}, body["id"]
+                stream, "blocksresponse_confirmed", confirm_message, body["id"]
             )
+
         if not blocks:
-            self.config.app_log.info(f"blocksresponse, no blocks, {stream.peer.host}")
+            self.config.app_log.info(f"[BLOCKSRESPONSE] No blocks received from {stream.peer.host}")
             self.config.consensus.syncing = False
             stream.synced = True
             return
+
         self.config.consensus.syncing = True
         blocks = [await Block.from_dict(x) for x in blocks]
         first_inbound_block = blocks[0]
-        forward_blocks_chain = await self.config.consensus.build_remote_chain(
-            blocks[-1]
-        )
+
+        forward_blocks_chain = await self.config.consensus.build_remote_chain(blocks[-1])
         inbound_blocks = blocks + forward_blocks_chain.init_blocks[1:]
         inbound_blockchain = Blockchain(inbound_blocks, partial=True)
+
         (
             backward_blocks,
             status,
@@ -604,8 +607,21 @@ class NodeRPC(BaseRPC):
         self.config.consensus.syncing = False
 
     async def blocksresponse_confirmed(self, body, stream):
+        """
+        Handles confirmation of received block responses.
+
+        - Extracts the `start_index` from the response.
+        - Removes the corresponding entry from the retry queue to prevent duplicate processing.
+
+        This method ensures proper acknowledgment of received block sync responses.
+        """
+        self.config.app_log.info(f"[BLOCKSRESPONSE_CONFIRM] Received confirmation: {body}")
+
         params = body.get("result")
         start_index = params.get("start_index")
+
+        self.config.app_log.info(f"[BLOCKSRESPONSE_CONFIRM] Blocks starting from index {start_index} confirmed")
+
         if (
             stream.peer.rid,
             "blocksresponse",
