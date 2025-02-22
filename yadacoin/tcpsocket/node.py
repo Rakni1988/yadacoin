@@ -151,6 +151,8 @@ class NodeRPC(BaseRPC):
                 await peer_stream.write_params("service_provider_request", payload2)
 
     async def newtxn(self, body, stream):
+        self.config.app_log.info(f"[NEW_TXN] Received newtxn: {body}")
+
         payload = body.get("params", {})
         transaction = payload.get("transaction")
         txn = None
@@ -160,28 +162,30 @@ class NodeRPC(BaseRPC):
         elif payload.get("hash"):
             txn = Transaction.from_dict(payload)
         else:
-            self.config.app_log.info("newtxn, no payload")
+            self.config.app_log.info("[NEW_TXN] No transaction payload received")
             return
 
         txn_id = txn.transaction_signature
 
         if stream.peer.protocol_version > 2:
-            await self.write_result(
-                stream, "newtxn_confirmed", {"transaction_id": txn.transaction_signature}, body["id"]
-            )
+            confirm_message = {
+                "transaction_id": txn.transaction_signature
+            }
+            self.config.app_log.info(f"[NEW_TXN] Sending confirmation: {confirm_message}")
+            await self.write_result(stream, "newtxn_confirmed", confirm_message, body["id"])
 
         existing_txn = await self.config.mongo.async_db.miner_transactions.find_one({"id": txn_id})
         if existing_txn:
-            self.config.app_log.warning(f"Transaction {txn_id} already in mempool! Ignoring.")
+            self.config.app_log.warning(f"[NEW_TXN] Transaction {txn_id} already in mempool! Ignoring.")
             return
 
-        for input_item in txn.inputs:
-            existing_input_txn = await self.config.mongo.async_db.miner_transactions.find_one(
-                {"public_key": txn.public_key, "inputs.id": input_item.id}
-            )
-            if existing_input_txn:
-                self.config.app_log.warning(f"Duplicate transaction detected for {txn_id}! Ignoring.")
-                return
+        input_ids = [input_item.id for input_item in txn.inputs]
+        existing_input_txn = await self.config.mongo.async_db.miner_transactions.find_one(
+            {"public_key": txn.public_key, "inputs.id": {"$in": input_ids}}
+        )
+        if existing_input_txn:
+            self.config.app_log.warning(f"[NEW_TXN] Duplicate transaction detected for {txn_id}! Ignoring.")
+            return
 
         self.newtxn_tracker.by_host[stream.peer.host] = (
             self.newtxn_tracker.by_host.get(stream.peer.host, 0) + 1
@@ -321,12 +325,22 @@ class NodeRPC(BaseRPC):
                 ] = {"transaction": txn.to_dict()}
 
     async def newtxn_confirmed(self, body, stream):
-        self.config.app_log.info(f"🔄 Received newtxn_confirmed: {body}")
+        """
+        Handles transaction confirmation received from a peer.
+
+        - Extracts the confirmed transaction ID from the response.
+        - Ensures the transaction ID is present; otherwise, logs a warning.
+        - Removes the transaction from the retry queue if it was previously pending.
+        - Marks the peer as a confirmed sender of the transaction to avoid redundant processing.
+
+        This method ensures efficient tracking of confirmed transactions and prevents unnecessary retransmissions.
+        """
+        self.config.app_log.info(f"[NEW_TXN_CONFIRM] Received confirmation: {body}")
 
         txn_id = body.get("result", {}).get("transaction_id")
 
         if not txn_id:
-            self.config.app_log.warning("⚠️ newtxn_confirmed received without a transaction ID!")
+            self.config.app_log.warning("[NEW_TXN_CONFIRM] Received confirmation without a transaction ID!")
             return
 
         retry_key = (stream.peer.rid, "newtxn", txn_id)
@@ -336,7 +350,7 @@ class NodeRPC(BaseRPC):
         self.confirmed_peers.add(retry_key)
 
         self.config.app_log.info(
-            f"✅ Transaction {txn_id} confirmed by peer {stream.peer.rid}. Peer added to confirmed list."
+            f"[NEW_TXN_CONFIRM] Transaction {txn_id} confirmed by peer {stream.peer.rid}. Peer added to confirmed list."
         )
 
     async def newblock(self, body, stream):

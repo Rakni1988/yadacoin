@@ -433,7 +433,7 @@ class RPCSocketClient(TCPClient):
                 if body.get("method") == "keepalive":
                     self.config.health.tcp_client.last_activity = time.time()
                     stream.last_activity = int(time.time())
-                    self.config.app_log.info(f"✅ KeepAlive response received from {stream.peer.host}")
+                    self.config.app_log.debug(f"✅ KeepAlive response received from {stream.peer.host}")
                     continue
 
                 if "result" in body:
