@@ -151,7 +151,6 @@ class NodeRPC(BaseRPC):
                 await peer_stream.write_params("service_provider_request", payload2)
 
     async def newtxn(self, body, stream):
-        self.config.app_log.info(f"📥 Received newtxn: {body}")
         payload = body.get("params", {})
         transaction = payload.get("transaction")
         txn = None
@@ -365,7 +364,7 @@ class NodeRPC(BaseRPC):
                 await self.config.nodeShared.write_result(
                     stream,
                     "newblock_confirmed",
-                    {"block_hash": block_hash, "block_index": block_index},  # TYLKO HASH i INDEX
+                    {"block_hash": block_hash, "block_index": block_index},
                     body["id"]
                 )
             return
@@ -533,8 +532,12 @@ class NodeRPC(BaseRPC):
         result = body.get("result")
         blocks = result.get("blocks")
         if stream.peer.protocol_version > 1:
+            start_index = body.get("result", {}).get("start_index", None)
+            
+            self.config.app_log.info(f"📤 Sending blocksresponse_confirmed: start_index={start_index}")
+
             await self.write_result(
-                stream, "blocksresponse_confirmed", body.get("result", {}), body["id"]
+                stream, "blocksresponse_confirmed", {"start_index": start_index}, body["id"]
             )
         if not blocks:
             self.config.app_log.info(f"blocksresponse, no blocks, {stream.peer.host}")
