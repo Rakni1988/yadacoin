@@ -161,8 +161,8 @@ class NodeRPC(BaseRPC):
         - If the transaction involves a known WebSocket user, forwards it to the appropriate peer.
 
         ### Protocol version handling:
+        - `protocol_version > 3`: The node confirms transactions by returning only `transaction_id`.
         - `protocol_version > 2`: The node confirms transactions by returning the full transaction payload.
-        - `protocol_version > 3`: The node optimizes transaction confirmation by returning only `transaction_id`.
 
         The method ensures efficient transaction propagation across the network while reducing unnecessary database queries.
         """
@@ -189,7 +189,7 @@ class NodeRPC(BaseRPC):
         elif stream.peer.protocol_version > 2:
             self.config.app_log.info("[NEW_TXN] Using protocol v3 (full transaction payload)")
             await self.write_result(
-                stream, "newtxn_confirmed", {"transaction": body.get("params", {})}, body["id"]
+                stream, "newtxn_confirmed", {"transaction": txn.to_dict()}, body["id"]
             )
 
         existing_txn = await self.config.mongo.async_db.miner_transactions.find_one({"id": txn_id})
@@ -358,13 +358,18 @@ class NodeRPC(BaseRPC):
 
         result = body.get("result", {})
 
-        txn_id = result.get("transaction_id")
+        self.config.app_log.info(f"[DEBUG] Received `newtxn_confirmed`: {result}")
 
+        txn_id = result.get("transaction_id")
+        self.config.app_log.info(f"[DEBUG] Extracted `transaction_id`: {txn_id}")
+
+        # Jeśli nie mamy transaction_id, sprawdzamy pełny payload
         if txn_id is None and "transaction" in result:
             txn_data = result["transaction"]
-            txn_id = txn_data.get("id")
+            self.config.app_log.info(f"[DEBUG] Full transaction data received: {txn_data}")
 
-            self.config.app_log.info(f"[NEW_TXN_CONFIRM] Extracted txn_id from raw JSON: {txn_id}")
+            txn_id = txn_data.get("id")
+            self.config.app_log.info(f"[DEBUG] Extracted `id` from transaction: {txn_id}")
 
         if not txn_id:
             self.config.app_log.warning("[NEW_TXN_CONFIRM] Received confirmation without a transaction ID! Ignoring.")
