@@ -77,7 +77,6 @@ class NodeClientNewTxnTracker:
 
 class NodeRPC(BaseRPC):
     retry_messages = {}
-    confirmed_peers = set()
 
     def __init__(self):
         super(NodeRPC, self).__init__()
@@ -157,6 +156,7 @@ class NodeRPC(BaseRPC):
         - Verifies if the transaction already exists in the mempool to prevent duplicates.
         - Checks for double-spending by ensuring none of the transaction inputs have been used before.
         - Tracks incoming transactions per host and transaction ID for monitoring.
+        - Immediately stores the sender in `txn_tracking` to prevent re-sending the transaction to them.
         - Adds the transaction to the processing queue if all validations pass.
         - If the transaction involves a known WebSocket user, forwards it to the appropriate peer.
 
@@ -191,6 +191,12 @@ class NodeRPC(BaseRPC):
             await self.write_result(
                 stream, "newtxn_confirmed", {"transaction": txn.to_dict()}, body["id"]
             )
+
+        await self.config.mongo.async_db.txn_tracking.update_one(
+            {"rid": stream.peer.rid},
+            {"$set": {f"transactions.{txn_id}": time.time()}},
+            upsert=True
+        )
 
         existing_txn = await self.config.mongo.async_db.miner_transactions.find_one({"id": txn_id})
         if existing_txn:
@@ -238,7 +244,15 @@ class NodeRPC(BaseRPC):
         if peer_stream:
             await peer_stream.newtxn(body, source="tcpsocket")
 
-    async def process_transaction_queue(self):
+    async def process_transaction_queue_item(self, item):
+        """
+        Processes each transaction from the queue, verifies it, and propagates it to unconfirmed peers.
+
+        - Runs transaction verification with the latest validation rules.
+        - Stores the transaction in `miner_transactions` if valid.
+        - Checks `txn_tracking` in MongoDB to avoid sending to already confirmed peers.
+        - Sends transaction to inbound and outbound peers who have not yet confirmed it.
+        """
         item = self.config.processing_queues.transaction_queue.pop()
         i = 0  # max loops
         while item:
@@ -296,51 +310,29 @@ class NodeRPC(BaseRPC):
             {"id": txn.transaction_signature}, txn.to_dict(), upsert=True
         )
 
-        async def make_gen(streams):
-            for stream in streams:
-                yield stream
+        confirmed_peers = await self.config.mongo.async_db.txn_tracking.find(
+            {f"transactions.{txn.transaction_signature}": {"$exists": True}}
+        ).to_list(length=None)
+
+        confirmed_rids = {peer["rid"] for peer in confirmed_peers}
 
         async for peer_stream in self.config.peer.get_inbound_streams():
-            if peer_stream.peer.rid == stream.peer.rid:
-                self.config.app_log.debug(
-                    f"Skipping peer {stream.peer.rid} in inbound stream as it is the sender."
-                )
-                continue
-            elif (
-                stream.peer.rid,
-                "newtxn",
-                txn.transaction_signature,
-            ) in self.confirmed_peers:
-                self.config.app_log.debug(
-                    f"Skipping peer {stream.peer.rid} in inbound stream as it has already confirmed the transaction."
-                )
+            if peer_stream.peer.rid in confirmed_rids:
+                self.config.app_log.info(f"Skipping {peer_stream.peer.rid} - already confirmed.")
                 continue
             if peer_stream.peer.protocol_version > 1:
-                self.retry_messages[
-                    (peer_stream.peer.rid, "newtxn", txn.transaction_signature)
-                ] = {"transaction": txn.to_dict()}
+                self.retry_messages[(peer_stream.peer.rid, "newtxn", txn.transaction_signature)] = {
+                    "transaction": txn.to_dict()
+                }
 
-        async for peer_stream in make_gen(
-            await self.config.peer.get_outbound_streams()
-        ):
-            if peer_stream.peer.rid == stream.peer.rid:
-                self.config.app_log.debug(
-                    f"Skipping peer {stream.peer.rid} in outbound stream as it is the sender."
-                )
-                continue
-            elif (
-                stream.peer.rid,
-                "newtxn",
-                txn.transaction_signature,
-            ) in self.confirmed_peers:
-                self.config.app_log.debug(
-                    f"Skipping peer {stream.peer.rid} in outbound stream as it has already confirmed the transaction."
-                )
+        async for peer_stream in await self.config.peer.get_outbound_streams():
+            if peer_stream.peer.rid in confirmed_rids:
+                self.config.app_log.info(f"Skipping {peer_stream.peer.rid} - already confirmed.")
                 continue
             if peer_stream.peer.protocol_version > 1:
-                self.config.nodeClient.retry_messages[
-                    (peer_stream.peer.rid, "newtxn", txn.transaction_signature)
-                ] = {"transaction": txn.to_dict()}
+                self.config.nodeClient.retry_messages[(peer_stream.peer.rid, "newtxn", txn.transaction_signature)] = {
+                    "transaction": txn.to_dict()
+                }
 
     async def newtxn_confirmed(self, body, stream):
         """
@@ -358,28 +350,26 @@ class NodeRPC(BaseRPC):
 
         result = body.get("result", {})
 
-        self.config.app_log.info(f"[DEBUG] Received `newtxn_confirmed`: {result}")
-
         txn_id = result.get("transaction_id")
-        self.config.app_log.info(f"[DEBUG] Extracted `transaction_id`: {txn_id}")
 
-        # Jeśli nie mamy transaction_id, sprawdzamy pełny payload
-        if txn_id is None and "transaction" in result:
-            txn_data = result["transaction"]
-            self.config.app_log.info(f"[DEBUG] Full transaction data received: {txn_data}")
-
-            txn_id = txn_data.get("id")
-            self.config.app_log.info(f"[DEBUG] Extracted `id` from transaction: {txn_id}")
+        if txn_id is None and result.get("transaction"):
+            txn = Transaction.from_dict(result.get("transaction"))
+            txn_id = txn.transaction_signature
 
         if not txn_id:
-            self.config.app_log.warning("[NEW_TXN_CONFIRM] Received confirmation without a transaction ID! Ignoring.")
+            self.config.app_log.warning("[NEW_TXN_CONFIRM] Received confirmation without a transaction ID!")
             return
 
         retry_key = (stream.peer.rid, "newtxn", txn_id)
         if retry_key in self.retry_messages:
             del self.retry_messages[retry_key]
 
-        self.confirmed_peers.add(retry_key)
+        # Aktualizacja dokumentu dla `rid`, dodanie transakcji do `transactions`
+        await self.config.mongo.async_db.txn_tracking.update_one(
+            {"rid": stream.peer.rid},  # Szukamy wpisu dla `rid`
+            {"$set": {f"transactions.{txn_id}": time.time()}},  # Dodajemy `txn_id -> timestamp`
+            upsert=True  # Jeśli wpisu `rid` nie ma, tworzymy go
+        )
 
         self.config.app_log.info(
             f"[NEW_TXN_CONFIRM] Transaction {txn_id} confirmed by peer {stream.peer.rid}. Peer added to confirmed list."
