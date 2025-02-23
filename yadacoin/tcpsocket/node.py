@@ -320,7 +320,7 @@ class NodeRPC(BaseRPC):
             for stream in streams:
                 yield stream
 
-        async for peer_stream in make_gen(await self.config.peer.get_inbound_streams()):
+        async for peer_stream in self.config.peer.get_inbound_streams():
             if peer_stream.peer.rid in confirmed_rids:
                 self.config.app_log.debug(f"Skipping {peer_stream.peer.rid} - already confirmed.")
                 continue
@@ -329,7 +329,9 @@ class NodeRPC(BaseRPC):
                     "transaction": txn.to_dict()
                 }
 
-        async for peer_stream in make_gen(await self.config.peer.get_outbound_streams()):
+        async for peer_stream in make_gen(
+            await self.config.peer.get_outbound_streams()
+        ):
             if peer_stream.peer.rid in confirmed_rids:
                 self.config.app_log.debug(f"Skipping {peer_stream.peer.rid} - already confirmed.")
                 continue
