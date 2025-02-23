@@ -316,18 +316,22 @@ class NodeRPC(BaseRPC):
 
         confirmed_rids = {peer["rid"] for peer in confirmed_peers}
 
-        async for peer_stream in self.config.peer.get_inbound_streams():
+        async def make_gen(streams):
+            for stream in streams:
+                yield stream
+
+        async for peer_stream in make_gen(await self.config.peer.get_inbound_streams()):
             if peer_stream.peer.rid in confirmed_rids:
-                self.config.app_log.info(f"Skipping {peer_stream.peer.rid} - already confirmed.")
+                self.config.app_log.debug(f"Skipping {peer_stream.peer.rid} - already confirmed.")
                 continue
             if peer_stream.peer.protocol_version > 1:
                 self.retry_messages[(peer_stream.peer.rid, "newtxn", txn.transaction_signature)] = {
                     "transaction": txn.to_dict()
                 }
 
-        async for peer_stream in await self.config.peer.get_outbound_streams():
+        async for peer_stream in make_gen(await self.config.peer.get_outbound_streams()):
             if peer_stream.peer.rid in confirmed_rids:
-                self.config.app_log.info(f"Skipping {peer_stream.peer.rid} - already confirmed.")
+                self.config.app_log.debug(f"Skipping {peer_stream.peer.rid} - already confirmed.")
                 continue
             if peer_stream.peer.protocol_version > 1:
                 self.config.nodeClient.retry_messages[(peer_stream.peer.rid, "newtxn", txn.transaction_signature)] = {
