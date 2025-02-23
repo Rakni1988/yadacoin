@@ -244,15 +244,7 @@ class NodeRPC(BaseRPC):
         if peer_stream:
             await peer_stream.newtxn(body, source="tcpsocket")
 
-    async def process_transaction_queue_item(self, item):
-        """
-        Processes each transaction from the queue, verifies it, and propagates it to unconfirmed peers.
-
-        - Runs transaction verification with the latest validation rules.
-        - Stores the transaction in `miner_transactions` if valid.
-        - Checks `txn_tracking` in MongoDB to avoid sending to already confirmed peers.
-        - Sends transaction to inbound and outbound peers who have not yet confirmed it.
-        """
+    async def process_transaction_queue(self):
         item = self.config.processing_queues.transaction_queue.pop()
         i = 0  # max loops
         while item:
@@ -269,6 +261,14 @@ class NodeRPC(BaseRPC):
             item = self.config.processing_queues.transaction_queue.pop()
 
     async def process_transaction_queue_item(self, item):
+        """
+        Processes each transaction from the queue, verifies it, and propagates it to unconfirmed peers.
+
+        - Runs transaction verification with the latest validation rules.
+        - Stores the transaction in `miner_transactions` if valid.
+        - Checks `txn_tracking` in MongoDB to avoid sending to already confirmed peers.
+        - Sends transaction to inbound and outbound peers who have not yet confirmed it.
+        """
         txn = item.transaction
         stream = item.stream
 
