@@ -406,6 +406,7 @@ class NodeRPC(BaseRPC):
 
         block_index = payload["block"].get("index")
         block_hash = payload["block"].get("hash")
+        stream.peer.height = block_index
 
         if stream.peer.protocol_version > 3:
             confirm_message = {"block_hash": block_hash, "block_index": block_index}
