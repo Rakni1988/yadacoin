@@ -225,7 +225,7 @@ class TU(object):  # Transaction Utilities
         - If all transactions under a peer (`rid`) are too old, the entry is deleted entirely.
         """
 
-        cutoff_time = time.time() - 60 * 60 * 24
+        cutoff_time = int(time.time()) - 60 * 60 * 24
 
         async for doc in config.mongo.async_db.txn_tracking.find():
             updated_transactions = {

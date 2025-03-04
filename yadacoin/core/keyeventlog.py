@@ -65,6 +65,13 @@ class BlocksQueryFields(Enum):
     PREV_PUBLIC_KEY_HASH = "transactions.prev_public_key_hash"
 
 
+class MempoolQueryFields(Enum):
+    TWICE_PREROTATED_KEY_HASH = "twice_prerotated_key_hash"
+    PREROTATED_KEY_HASH = "prerotated_key_hash"
+    PUBLIC_KEY_HASH = "public_key_hash"
+    PREV_PUBLIC_KEY_HASH = "prev_public_key_hash"
+
+
 class KeyEventException(Exception):
     pass
 
@@ -85,6 +92,10 @@ class FatalKeyEventException(Exception):
     def __init__(self, message, other_txn_to_delete=None):
         super().__init__(message)
         self.other_txn_to_delete = other_txn_to_delete
+
+
+class DoesNotSpendEntirelyToPrerotatedKeyHashException(FatalKeyEventException):
+    pass
 
 
 class KeyEvent:
@@ -682,3 +693,79 @@ class KeyEventLog:
             raise KELException(
                 "Mismatch: base_key_event.txn.public_key_hash does not match confirming_key_event.txn.prev_public_key_hash"
             )
+
+    @staticmethod
+    async def build_from_public_key(public_key):
+        config = Config()
+        log = []
+        address = str(P2PKHBitcoinAddress.from_pubkey(bytes.fromhex(public_key)))
+        inception = None
+        while True:
+            result = config.mongo.async_db.blocks.aggregate(
+                [
+                    {
+                        "$match": {
+                            BlocksQueryFields.PREROTATED_KEY_HASH.value: address
+                        },
+                    },
+                    {
+                        "$unwind": "$transactions",
+                    },
+                    {
+                        "$match": {
+                            BlocksQueryFields.PREROTATED_KEY_HASH.value: address
+                        },
+                    },
+                ]
+            )
+            res = await result.to_list(length=1)
+            if res:
+                txn = Transaction.from_dict(res[0]["transactions"])
+                if not txn.prev_public_key_hash:
+                    inception = txn
+                    break
+                address = str(
+                    P2PKHBitcoinAddress.from_pubkey(bytes.fromhex(txn.public_key_hash))
+                )
+            else:
+                break
+        if inception:
+            log.append(inception)
+            txn = inception
+            while True:
+                address = txn.prerotated_key_hash
+                result = config.mongo.async_db.blocks.aggregate(
+                    [
+                        {
+                            "$match": {
+                                BlocksQueryFields.PUBLIC_KEY_HASH.value: address
+                            },
+                        },
+                        {
+                            "$unwind": "$transactions",
+                        },
+                        {
+                            "$match": {
+                                BlocksQueryFields.PUBLIC_KEY_HASH.value: address
+                            },
+                        },
+                    ]
+                )
+                res = await result.to_list(length=1)
+                if res:
+                    txn = Transaction.from_dict(res[0]["transactions"])
+                    log.append(txn)
+                else:
+                    result_mempool = (
+                        await config.mongo.async_db.miner_transactions.find_one(
+                            {MempoolQueryFields.PUBLIC_KEY_HASH.value: address},
+                        )
+                    )
+                    if result_mempool:
+                        txn = Transaction.from_dict(result_mempool)
+                        txn.mempool = True
+                        log.append(txn)
+                    else:
+                        break
+
+        return log

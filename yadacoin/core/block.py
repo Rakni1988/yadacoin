@@ -16,6 +16,7 @@ import base64
 import binascii
 import hashlib
 import json
+import socket
 import time
 from datetime import timedelta
 from decimal import Decimal, getcontext
@@ -33,6 +34,7 @@ import yadacoin.core.config
 from yadacoin.core.chain import CHAIN
 from yadacoin.core.config import Config
 from yadacoin.core.keyeventlog import (
+    DoesNotSpendEntirelyToPrerotatedKeyHashException,
     FatalKeyEventException,
     KELException,
     KELHashCollection,
@@ -70,8 +72,19 @@ async def test_node(node, semaphore):
     config = Config()
     async with semaphore:
         try:
+            # DNS resolution block
+            # Check if the DNS for the node's host resolves to an IP address.
+            # If the DNS lookup fails, log the error and skip testing this node.
+            try:
+                socket.gethostbyname(node.host)
+            except socket.gaierror as dns_error:
+                config.app_log.warning(
+                    f"DNS resolution failed for {node.host}:{node.port}, error: {dns_error}"
+                )
+                return None
+
             stream = await TCPClient().connect(
-                node.host, node.port, timeout=timedelta(seconds=1)
+                node.host, node.port, timeout=timedelta(seconds=2)
             )
             return node
         except StreamClosedError:
@@ -356,6 +369,25 @@ class Block(object):
             target=target,
         )
 
+        if index >= CHAIN.XEGGEX_HACK_FORK and index < CHAIN.CHECK_KEL_FORK:
+            for txn in block.transactions[:]:
+                remove = False
+                if (
+                    txn.public_key
+                    == "02fd3ad0e7a613672d9927336d511916e15c507a1fab225ed048579e9880f15fed"
+                ):
+                    remove = True
+                if not remove:
+                    for output in txn.outputs:
+                        if output.to == "1Kh8tcPNxJsDH4KJx4TzLbqWwihDfhFpzj":
+                            remove = True
+                            break
+                if remove:
+                    config.app_log.info(
+                        f"Txn removed from block: Xeggex wallet has been frozen."
+                    )
+                    block.transactions.remove(txn)
+
         if block.index >= CHAIN.CHECK_KEL_FORK:
             # check if this transaction public key is listed in any KEL
             # if it is, try to create a key even log
@@ -363,6 +395,12 @@ class Block(object):
             for txn in block.transactions[:]:
                 if txn not in block.transactions:
                     continue  # it's already been deleted due to its failed counterpart
+
+                if txn.are_kel_fields_populated():
+                    if txn.public_key_hash in [output.to for output in txn.outputs]:
+                        raise DoesNotSpendEntirelyToPrerotatedKeyHashException(
+                            "Key event transactions must spent entire remaining balance to prerotated_key_hash."
+                        )
 
                 # test if already on chain
                 if await txn.is_already_onchain():
@@ -448,7 +486,16 @@ class Block(object):
         txns, transaction_objs, used_sigs, used_inputs, index, xtime
     ):
         config = Config()
-        for transaction_obj in txns:
+
+        if index >= CHAIN.ALLOW_SAME_BLOCK_SPENDING_FORK:
+            items_indexed = {x.transaction_signature: x for x in txns}
+            for txn in txns:
+                for input_item in txn.inputs:
+                    if input_item.id in items_indexed:
+                        input_item.input_txn = items_indexed[input_item.id]
+                        items_indexed[input_item.id].spent_in_txn = txn
+
+        for transaction_obj in txns[:]:
             try:
                 if transaction_obj.transaction_signature in used_sigs:
                     raise InvalidTransactionException(
@@ -479,6 +526,11 @@ class Block(object):
                 used_sigs.append(transaction_obj.transaction_signature)
             except Exception as e:
                 await Transaction.handle_exception(e, transaction_obj)
+                if (
+                    transaction_obj.spent_in_txn
+                    and transaction_obj.spent_in_txn in txns
+                ):
+                    txns.remove(transaction_obj.spent_in_txn)
                 continue
             try:
                 if int(index) > CHAIN.CHECK_TIME_FROM and (
@@ -660,26 +712,7 @@ class Block(object):
             raise Exception("Invalid block hash")
 
         address = str(P2PKHBitcoinAddress.from_pubkey(bytes.fromhex(self.public_key)))
-        try:
-            result = verify_signature(
-                base64.b64decode(self.signature),
-                self.hash.encode("utf-8"),
-                bytes.fromhex(self.public_key),
-            )
-            if not result:
-                raise Exception("block signature1 is invalid")
-        except:
-            try:
-                result = VerifyMessage(
-                    address,
-                    BitcoinMessage(self.hash.encode("utf-8"), magic=""),
-                    self.signature,
-                )
-                if not result:
-                    raise
-            except:
-                raise Exception("block signature2 is invalid")
-
+        self.verify_signature(address)
         if self.index >= CHAIN.PAY_MASTER_NODES_FORK:
             masernodes_by_address = (
                 Nodes.get_all_nodes_indexed_by_address_for_block_height(self.index)
@@ -706,7 +739,14 @@ class Block(object):
             if self.index >= CHAIN.CHECK_KEL_FORK:
                 # check if this transaction public key is listed in any KEL
                 # if it is, check if it's a valid key event
-                if await txn.has_key_event_log():
+
+                if txn.are_kel_fields_populated():
+                    if txn.public_key_hash in [output.to for output in txn.outputs]:
+                        raise DoesNotSpendEntirelyToPrerotatedKeyHashException(
+                            "Key event transactions must spent entire remaining balance to prerotated_key_hash."
+                        )
+
+                if await txn.has_key_event_log(block=self):
                     kel_hash_collection = await KELHashCollection.init_async(
                         self, verify_only=True
                     )
@@ -764,7 +804,10 @@ class Block(object):
                 if self.index >= CHAIN.CHECK_MASTERNODE_FEE_FORK:
                     masternode_fee_sum += float(txn.masternode_fee)
 
-            if self.index >= CHAIN.XEGGEX_HACK_FORK:
+            if (
+                self.index >= CHAIN.XEGGEX_HACK_FORK
+                and self.index < CHAIN.CHECK_KEL_FORK
+            ):
                 if (
                     txn.public_key
                     == "02fd3ad0e7a613672d9927336d511916e15c507a1fab225ed048579e9880f15fed"
@@ -789,7 +832,7 @@ class Block(object):
         if self.index >= CHAIN.CHECK_MASTERNODE_FEE_FORK:
             masternode_sum = sum(x for x in masternode_sums.values())
             if quantize_eight(fee_sum + masternode_fee_sum) != quantize_eight(
-                (coinbase_sum + (masternode_sum or reward - coinbase_sum)) - reward
+                (coinbase_sum + masternode_sum) - reward
             ):
                 raise TotalValueMismatchException(
                     "Masternode output totals do not equal block reward + masternode transaction fees",
@@ -815,6 +858,27 @@ class Block(object):
                     fee_sum,
                     (coinbase_sum - reward),
                 )
+
+    def verify_signature(self, address):
+        try:
+            result = verify_signature(
+                base64.b64decode(self.signature),
+                self.hash.encode("utf-8"),
+                bytes.fromhex(self.public_key),
+            )
+            if not result:
+                raise Exception("block signature1 is invalid")
+        except:
+            try:
+                result = VerifyMessage(
+                    address,
+                    BitcoinMessage(self.hash.encode("utf-8"), magic=""),
+                    self.signature,
+                )
+                if not result:
+                    raise
+            except:
+                raise Exception("block signature2 is invalid")
 
     def get_transaction_hashes(self):
         """Returns a sorted list of tx hash, so the merkle root is constant across nodes"""

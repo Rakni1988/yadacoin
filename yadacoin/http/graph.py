@@ -27,6 +27,7 @@ from bitcoin.wallet import P2PKHBitcoinAddress
 from coincurve.utils import verify_signature
 
 from eccsnacks.curve25519 import scalarmult_base
+from yadacoin.core.chain import CHAIN
 from yadacoin.core.collections import Collections
 from yadacoin.core.graph import Graph
 from yadacoin.core.peer import Group, Peers, User
@@ -79,11 +80,12 @@ class BaseGraphHandler(BaseHandler):
         update_last_collection_time = None
         if self.request.body:
             body = json.loads(self.request.body.decode("utf-8"))
-            ids = body.get("ids")
-            rids = body.get("rids")
-            if not isinstance(rids, list):
-                rids = [rids]
-            update_last_collection_time = body.get("update_last_collection_time")
+            if isinstance(body, dict):
+                ids = body.get("ids")
+                rids = body.get("rids")
+                if not isinstance(rids, list):
+                    rids = [rids]
+                update_last_collection_time = body.get("update_last_collection_time")
         try:
             key_or_wif = self.get_secure_cookie("key_or_wif").decode()
         except:
@@ -133,7 +135,9 @@ class GraphInfoHandler(BaseGraphHandler):
 class GraphRIDWalletHandler(BaseGraphHandler):
     async def get(self):
         address = self.get_query_argument("address")
-        amount_needed = self.get_query_argument("amount_needed", None)
+        amount_needed = self.get_query_argument("amount_needed", 0)
+        method = self.get_query_argument("method", "new")
+
         if amount_needed:
             amount_needed = float(amount_needed)
 
@@ -141,9 +145,15 @@ class GraphRIDWalletHandler(BaseGraphHandler):
             {"outputs.to": address}
         )
 
+        start_time = time.perf_counter()
+
         pending_used_inputs = {}
         pending_balance = 0
+        unspent_mempool_txns = {}
         async for mempool_txn in mempool_txns:
+            if mempool_txn["id"] in pending_used_inputs:
+                continue
+
             xaddress = str(
                 P2PKHBitcoinAddress.from_pubkey(
                     bytes.fromhex(mempool_txn["public_key"])
@@ -152,24 +162,57 @@ class GraphRIDWalletHandler(BaseGraphHandler):
             if address == xaddress and mempool_txn.get("inputs"):
                 for x in mempool_txn.get("inputs"):
                     pending_used_inputs[x["id"]] = mempool_txn
+                    if x["id"] in unspent_mempool_txns:
+                        for y in mempool_txn.get("outputs"):
+                            if y["to"] == address:
+                                pending_balance -= float(y["value"])
+                        del unspent_mempool_txns[x["id"]]
+
             if mempool_txn.get("outputs"):
                 for x in mempool_txn.get("outputs"):
                     if x["to"] == address:
                         pending_balance += float(x["value"])
+            unspent_mempool_txns[mempool_txn["id"]] = {
+                "_id": mempool_txn["id"],
+                "id": mempool_txn["id"],
+                "outputs": [x for x in mempool_txn["outputs"] if x["to"] == address],
+            }
 
-        balance = await self.config.BU.get_wallet_balance(address)
+        unspent_mempool_txns = list(unspent_mempool_txns.values())
 
-        unspent_txns = [
-            x
-            async for x in self.config.BU.get_wallet_unspent_transactions_for_spending(
-                address, inc_mempool=True, amount_needed=amount_needed
+        if method == "new":
+            self.config.app_log.info("Using NEW method for balance and UTXOs.")
+
+            result = await self.config.BU.get_unspent_outputs(
+                address, amount_needed=amount_needed, min_value=0, max_utxos=100
             )
-        ]
+            unspent_txns = result["unspent_utxos"]
+            balance = result["balance"]
+            max_transferable_value = result["max_transferable_value"]
+
+        else:
+            self.config.app_log.info("Using OLD method for balance and UTXOs.")
+
+            balance = await self.config.BU.get_wallet_balance(address)
+
+            unspent_txns = [
+                x
+                async for x in self.config.BU.get_wallet_unspent_transactions_for_spending(
+                    address, inc_mempool=True, amount_needed=amount_needed
+                )
+            ]
+
+            max_transferable_value = 0
+
+        end_time = time.perf_counter()
+        elapsed_time = end_time - start_time
 
         wallet = {
             "pending_balance": "{0:.8f}".format(pending_balance),
             "chain_balance": "{0:.8f}".format(balance),
             "balance": "{0:.8f}".format(balance),
+            "max_transferable_value": "{0:.8f}".format(max_transferable_value),
+            "processing_time_seconds": "{0:.2f}".format(elapsed_time),
             "unspent_transactions": unspent_txns,
         }
         self.render_as_json(wallet, indent=4)
@@ -206,7 +249,10 @@ class GraphTransactionHandler(BaseGraphHandler):
         self.render_as_json(list(transactions))
 
     async def post(self):
-        from yadacoin.core.keyeventlog import KELException
+        from yadacoin.core.keyeventlog import (
+            DoesNotSpendEntirelyToPrerotatedKeyHashException,
+            KELException,
+        )
 
         await self.get_base_graph()  # TODO: did this to set username_signature, refactor this
         items = json.loads(self.request.body.decode("utf-8"))
@@ -214,11 +260,27 @@ class GraphTransactionHandler(BaseGraphHandler):
             items = [
                 items,
             ]
-        else:
-            items = [item for item in items]
+        mempool_items = [
+            x async for x in self.config.mongo.async_db.miner_transactions.find({})
+        ]
+        mempool_txns = [Transaction.from_dict(txn) for txn in mempool_items]
+        item_txns = [Transaction.from_dict(txn) for txn in items]
+        if (
+            self.config.LatestBlock.block.index + 1
+            >= CHAIN.ALLOW_SAME_BLOCK_SPENDING_FORK
+        ):
+            items_indexed = {x.transaction_signature: x for x in item_txns}
+            for txn in mempool_txns + item_txns:
+                for input_item in txn.inputs:
+                    if input_item.id in items_indexed:
+                        input_item.input_txn = items_indexed[input_item.id]
+                        items_indexed[input_item.id].spent_in_txn = txn
+
         transactions = []
-        for txn in items:
-            transaction = Transaction.from_dict(txn)
+        for transaction in item_txns[:]:
+            if transaction not in item_txns:
+                continue
+            exception_raised = False
             try:
                 await transaction.verify(
                     check_input_spent=True,
@@ -226,19 +288,22 @@ class GraphTransactionHandler(BaseGraphHandler):
                     check_max_inputs=True,
                     check_kel=True,
                 )
+
+                if transaction.are_kel_fields_populated():
+                    if await transaction.is_already_in_mempool():
+                        raise KELException("Duplicate Key Event found in mempool.")
+
                 has_kel = await transaction.has_key_event_log()
                 if has_kel:
-                    for output in transaction.outputs:
-                        all_unspent = [
-                            x
-                            async for x in self.config.BU.get_wallet_unspent_transactions_for_dusting(
-                                output.to, limit=100
-                            )
-                        ]
+                    await transaction.verify_key_event_spends_entire_balance()  # TODO: add this check to block generation and verification
 
             except InvalidTransactionException:
+                exception_raised = True
                 await self.config.mongo.async_db.failed_transactions.insert_one(
-                    {"exception": "InvalidTransactionException", "txn": txn}
+                    {
+                        "exception": "InvalidTransactionException",
+                        "txn": transaction.to_dict(),
+                    }
                 )
                 print("InvalidTransactionException")
                 self.set_status(400)
@@ -246,18 +311,44 @@ class GraphTransactionHandler(BaseGraphHandler):
                     {"status": False, "message": "InvalidTransactionException"}
                 )
             except InvalidTransactionSignatureException:
+                exception_raised = True
                 print("InvalidTransactionSignatureException")
                 await self.config.mongo.async_db.failed_transactions.insert_one(
-                    {"exception": "InvalidTransactionSignatureException", "txn": txn}
+                    {
+                        "exception": "InvalidTransactionSignatureException",
+                        "txn": transaction.to_dict(),
+                    }
                 )
                 self.set_status(400)
                 return self.render_as_json(
                     {"status": False, "message": "InvalidTransactionSignatureException"}
                 )
+            except DoesNotSpendEntirelyToPrerotatedKeyHashException as e:
+                exception_raised = True
+                print("DoesNotSpendEntirelyToPrerotatedKeyHashException")
+                await self.config.mongo.async_db.failed_transactions.insert_one(
+                    {
+                        "exception": "DoesNotSpendEntirelyToPrerotatedKeyHashException",
+                        "txn": transaction.to_dict(),
+                        "message": str(e),
+                    }
+                )
+                self.set_status(400)
+                return self.render_as_json(
+                    {
+                        "status": False,
+                        "message": "DoesNotSpendEntirelyToPrerotatedKeyHashException",
+                    }
+                )
             except KELException as e:
+                exception_raised = True
                 print("KELException")
                 await self.config.mongo.async_db.failed_transactions.insert_one(
-                    {"exception": "KELException", "txn": txn, "message": str(e)}
+                    {
+                        "exception": "KELException",
+                        "txn": transaction.to_dict(),
+                        "message": str(e),
+                    }
                 )
                 self.set_status(400)
                 return self.render_as_json({"status": False, "message": "KELException"})
@@ -265,10 +356,17 @@ class GraphTransactionHandler(BaseGraphHandler):
             except MissingInputTransactionException:
                 pass
             except:
+                exception_raised = True
                 raise
                 print("uknown error")
                 self.set_status(400)
                 return self.render_as_json({"status": False, "message": "uknown error"})
+            finally:
+                if exception_raised:
+                    if transaction.spent_in_txn in transactions:
+                        transactions.remove(transaction.spent_in_txn)
+                    if transaction.spent_in_txn in item_txns:
+                        item_txns.remove(transaction.spent_in_txn)
             transactions.append(transaction)
 
         for x in transactions:
@@ -410,7 +508,7 @@ class GraphTransactionHandler(BaseGraphHandler):
                             (peer_stream.peer.rid, "newtxn", x.transaction_signature)
                         ] = {"transaction": x.to_dict()}
 
-        return self.render_as_json(items)
+        return self.render_as_json([item.to_dict() for item in item_txns])
 
     async def create_relationship(self, username_signature, username, to):
         config = self.config

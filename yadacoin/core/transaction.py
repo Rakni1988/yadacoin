@@ -110,6 +110,7 @@ class Transaction(object):
         twice_prerotated_key_hash="",
         public_key_hash="",
         prev_public_key_hash="",
+        spent_in_txn="",
     ):
         self.app_log = getLogger("tornado.application")
         self.config = Config()
@@ -129,7 +130,7 @@ class Transaction(object):
         self.requested_rid = requested_rid if requested_rid else ""
         self.hash = txn_hash
         self.outputs = []
-        self.extra_blocks = extra_blocks
+        self.extra_blocks = extra_blocks or []
         self.seed_gateway_rid = seed_gateway_rid
         self.seed_rid = seed_rid
 
@@ -171,6 +172,7 @@ class Transaction(object):
         self.twice_prerotated_key_hash = twice_prerotated_key_hash
         self.public_key_hash = public_key_hash
         self.prev_public_key_hash = prev_public_key_hash
+        self.spent_in_txn = spent_in_txn
 
     @classmethod
     async def generate(
@@ -426,6 +428,7 @@ class Transaction(object):
             twice_prerotated_key_hash=txn.get("twice_prerotated_key_hash", ""),
             public_key_hash=txn.get("public_key_hash", ""),
             prev_public_key_hash=txn.get("prev_public_key_hash", ""),
+            spent_in_txn=txn.get("spent_in_txn", ""),
         )
 
     def in_the_future(self):
@@ -475,7 +478,9 @@ class Transaction(object):
             return Transaction.from_dict(txn)
 
     @staticmethod
-    async def handle_exception(e, txn):
+    async def handle_exception(e, txn, transactions=None):
+        if transactions is None:
+            transactions = []
         if isinstance(e, TooManyInputsException):
             txn.inputs = []
         config = Config()
@@ -490,6 +495,13 @@ class Transaction(object):
             {"id": txn.transaction_signature}
         )
         config.app_log.warning("Exception {}".format(e))
+
+        if txn.spent_in_txn:
+            if txn.spent_in_txn in transactions:
+                transactions.remove(txn.spent_in_txn)
+            await config.mongo.async_db.miner_transactions.delete_many(
+                {"id": txn.spent_in_txn.transaction_signature}
+            )
 
     def verify_signature(self, address):
         try:
@@ -533,6 +545,7 @@ class Transaction(object):
         check_max_inputs=False,
         check_masternode_fee=False,
         check_kel=False,
+        block=None,
     ):
         from yadacoin.contracts.base import Contract
         from yadacoin.core.keyeventlog import KELException
@@ -548,7 +561,7 @@ class Transaction(object):
         if check_kel:
             from yadacoin.core.keyeventlog import KeyEvent
 
-            has_kel = await self.has_key_event_log()
+            has_kel = await self.has_key_event_log(block)
 
             if has_kel:
                 txn_key_event = KeyEvent(self)
@@ -559,7 +572,9 @@ class Transaction(object):
                 )
 
         if verify_hash != self.hash:
-            raise InvalidTransactionException("transaction is invalid")
+            raise InvalidTransactionException(
+                f"transaction is invalid - {verify_hash} - {self.hash}"
+            )
 
         self.verify_signature(address)
 
@@ -576,10 +591,14 @@ class Transaction(object):
         exclude_recovered_ids = []
         async for txn in self.get_inputs(self.inputs):
             txn_input = None
-            input_txn = await self.config.BU.get_transaction_by_id(txn.id)
+            if txn.input_txn:
+                input_txn = txn.input_txn
+                txn_input = txn.input_txn
+            else:
+                input_txn = await self.config.BU.get_transaction_by_id(txn.id)
 
-            if input_txn:
-                txn_input = Transaction.from_dict(input_txn)
+                if input_txn:
+                    txn_input = Transaction.from_dict(input_txn)
 
             if not input_txn:
                 if self.extra_blocks:
@@ -1070,7 +1089,48 @@ class Transaction(object):
             return True
         return False
 
-    async def has_key_event_log(self):
+    async def is_already_in_mempool(self):
+        from yadacoin.core.keyeventlog import MempoolQueryFields
+
+        config = Config()
+        query = []
+        if self.twice_prerotated_key_hash:
+            query.append(
+                {
+                    MempoolQueryFields.TWICE_PREROTATED_KEY_HASH.value: self.twice_prerotated_key_hash
+                }
+            )
+
+        if self.prerotated_key_hash:
+            query.append(
+                {MempoolQueryFields.PREROTATED_KEY_HASH.value: self.prerotated_key_hash}
+            )
+
+        if self.public_key_hash:
+            query.append(
+                {
+                    MempoolQueryFields.PUBLIC_KEY_HASH.value: self.public_key_hash,
+                }
+            )
+
+        if self.prev_public_key_hash:
+            query.append(
+                {
+                    MempoolQueryFields.PREV_PUBLIC_KEY_HASH.value: self.prev_public_key_hash,
+                }
+            )
+        if not query:
+            return False
+        result = await config.mongo.async_db.blocks.find_one(
+            {
+                "$or": query,
+            }
+        )
+        if result:
+            return True
+        return False
+
+    async def has_key_event_log(self, block=None):
         from yadacoin.core.keyeventlog import BlocksQueryFields
 
         # this function is the primary method for catching transactions which attempt
@@ -1086,18 +1146,57 @@ class Transaction(object):
                 },
             ],
         }
+        if block:
+            query["index"] = {"$lte": block.index}
+
         result = await config.mongo.async_db.blocks.find_one(query)
         if result:
             return True
         elif self.extra_blocks:
-            for block in self.extra_blocks:
-                for xtxn in block.transactions:
+            for extra_block in self.extra_blocks:
+                if extra_block.index >= block.index:
+                    return False
+                for xtxn in extra_block.transactions:
+                    if xtxn.transaction_signature == self.transaction_signature:
+                        return False
                     if (
                         xtxn.twice_prerotated_key_hash == address
                         or xtxn.prerotated_key_hash == address
                     ):
                         return True
         return False
+
+    async def verify_key_event_spends_entire_balance(self):
+        from yadacoin.core.keyeventlog import (
+            DoesNotSpendEntirelyToPrerotatedKeyHashException,
+        )
+
+        if self.public_key_hash in [output.to for output in self.outputs]:
+            raise DoesNotSpendEntirelyToPrerotatedKeyHashException(
+                "Key event transactions must spend entire remaining balance to prerotated_key_hash."
+            )
+
+        all_inputs = [
+            x
+            async for x in self.config.mongo.async_db.blocks.aggregate(
+                [
+                    {"$match": {"transactions.outputs.to": self.public_key_hash}},
+                    {"$unwind": "$transactions"},
+                    {
+                        "$match": {
+                            "transactions.outputs.to": self.public_key_hash,
+                            "transactions.outputs.value": {"$gt": 0},
+                        }
+                    },
+                ]
+            )
+        ]
+        if len(all_inputs) != len(self.inputs):
+            for test_input in self.inputs:
+                if not test_input.input_txn:
+                    raise DoesNotSpendEntirelyToPrerotatedKeyHashException(
+                        "Key event transactions must spend all utxos."
+                    )
 
     def to_dict(self):
         relationship = self.relationship
@@ -1139,13 +1238,15 @@ class Transaction(object):
 
 
 class Input(object):
-    def __init__(self, signature):
+    def __init__(self, signature, input_txn=None):
         self.id = signature
+        self.input_txn = input_txn
 
     @classmethod
     def from_dict(cls, txn):
         return cls(
             signature=txn.get("id", ""),
+            input_txn=txn.get("input_txn", ""),
         )
 
     def to_dict(self):
