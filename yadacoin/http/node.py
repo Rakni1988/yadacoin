@@ -21,7 +21,10 @@ from datetime import datetime, timezone
 
 from tornado import escape
 
+from yadacoin.core.block import Block
+from yadacoin.core.blockchain import Blockchain
 from yadacoin.core.chain import CHAIN
+from yadacoin.core.processingqueue import BlockProcessingQueueItem
 from yadacoin.core.transaction import Transaction
 from yadacoin.core.transactionutils import TU
 from yadacoin.http.base import BaseHandler
@@ -216,10 +219,15 @@ class GetPendingTransactionHandler(BaseHandler):
     async def get(self):
         txn_id = self.get_query_argument("id", None).replace(" ", "+")
         if not txn_id:
-            return self.render_as_json({})
-        return self.render_as_json(
-            await self.config.mongo.async_db.miner_transactions.find_one({"id": txn_id})
-        )
+
+            return self.render_as_json({"error": "Transaction ID missing"}, status=400)
+
+        txn = await self.config.mongo.async_db.miner_transactions.find_one({"id": txn_id})
+
+        if txn:
+            return self.render_as_json(txn)
+        else:
+            return self.render_as_json({"error": "Transaction not found"}, status=404)
 
 
 class GetTransactionByPublicKeyHandler(BaseHandler):
@@ -449,6 +457,79 @@ class GetMonitoringHandler(BaseHandler):
         self.render_as_json(op_data, indent=4)
 
 
+class GetBlockTemplateHandler(BaseHandler):
+    async def get(self):
+        """
+        Retrieves a nearly complete block template for mining pools.
+        """
+        try:
+            block_template = await self.config.LatestBlock.get_block_template()
+            if block_template:
+                self.write(block_template)
+            else:
+                self.config.app_log.error("Failed to retrieve block template.")
+                self.set_status(500)
+                self.write({"error": "Failed to retrieve block template."})
+        except Exception as e:
+            self.config.app_log.error(f"Exception in GetBlockTemplateHandler: {str(e)}")
+            self.set_status(500)
+            self.write({"error": str(e)})
+
+
+class SubmitBlockHandler(BaseHandler):
+    async def post(self):
+        try:
+            block_data = escape.json_decode(self.request.body)
+            block = await Block.from_dict(block_data)
+            self.config.app_log.info(f"Received block data: {block_data}")
+            
+            await self.config.consensus.insert_consensus_block(block, self.config.peer)
+
+            self.config.processing_queues.block_queue.add(
+                BlockProcessingQueueItem(Blockchain(block.to_dict()))
+            )
+
+            await self.config.nodeShared.send_block_to_peers(block)
+            await self.config.websocketServer.send_block(block)
+
+            self.write({"status": "success", "message": "Block accepted"})
+            self.config.app_log.info(f"Block accepted: {block.hash}")
+
+        except Exception as e:
+            self.write({"status": "error", "message": str(e)})
+            self.config.app_log.info(f"Failed to submit block: {e}")
+
+class TransactionStatusHandler(BaseHandler):
+    async def get(self):
+        txn_id = self.get_query_argument("id").replace(" ", "+")
+
+        best_mt_txn = await self.config.mongo.async_db.miner_transactions.find_one(
+            {"id": txn_id}, {"_id": 0}, sort=[("time", -1)]
+        )
+
+        result = await self.config.mongo.async_db.blocks.find_one(
+            {"transactions.id": txn_id}, {"_id": 0, "transactions": 1}
+        )
+
+        best_block_txn = None
+        if result:
+            all_block_txn = [
+                txn for txn in result["transactions"] if txn["id"] == txn_id
+            ]
+            if all_block_txn:
+                best_block_txn = max(all_block_txn, key=lambda x: int(x["time"]))
+
+        if best_block_txn:
+            best_block_txn["status"] = "success"
+            return self.render_as_json(best_block_txn)
+
+        if best_mt_txn:
+            best_mt_txn["status"] = "mempool"
+            return self.render_as_json(best_mt_txn)
+
+        self.status_code = 404
+        return self.render_as_json({"status": "failed", "message": "Transaction not found"})
+
 class GetTestedNodesHandler(BaseHandler):
     async def get(self):
         """Zwraca listę ostatnio przetestowanych węzłów."""
@@ -487,5 +568,8 @@ NODE_HANDLERS = [
     (r"/get-expired-smart-contract-transaction", GetExpiredSmartContractTransaction),
     (r"/get-trigger-transactions", GetSmartContractTriggerTransaction),
     (r"/get-monitoring", GetMonitoringHandler),
+    (r"/get-block-template", GetBlockTemplateHandler),
+    (r"/submitblock", SubmitBlockHandler),
+    (r"/get-transaction-status", TransactionStatusHandler),
     (r"/get-tested-nodes", GetTestedNodesHandler),
 ]

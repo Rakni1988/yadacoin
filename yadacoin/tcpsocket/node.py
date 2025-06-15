@@ -466,6 +466,7 @@ class NodeRPC(BaseRPC):
 
         block_index = payload["block"].get("index")
         block_hash = payload["block"].get("hash")
+        stream.peer.height = block_index
 
         if stream.peer.protocol_version > 3:
             confirm_message = {"block_hash": block_hash, "block_index": block_index}
@@ -1138,6 +1139,8 @@ class NodeSocketClient(RPCSocketClient, NodeRPC):
             if not stream:
                 return
 
+            peer.connection_time = time.time()
+
             await self.write_params(
                 stream, "connect", {"peer": self.config.peer.to_dict()}
             )
@@ -1170,6 +1173,13 @@ class NodeSocketClient(RPCSocketClient, NodeRPC):
             params = body.get("params", {})
             challenge = params.get("token")
             signed_challenge = TU.generate_signature(challenge, self.config.private_key)
+            if "peer" in params:
+                peer_data = params["peer"]
+                if "node_version" in peer_data:
+                    stream.peer.node_version = tuple(peer_data["node_version"])
+                if "peer_type" in peer_data:
+                    stream.peer.peer_type = peer_data["peer_type"]
+
         except:
             return await self.remove_peer(
                 stream, reason="NodeSocketClient challenge: generate_signature"
