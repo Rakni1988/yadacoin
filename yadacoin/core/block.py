@@ -11,25 +11,19 @@ For commercial license inquiries, contact: info@yadacoin.io
 Full license terms: see LICENSE.txt in this repository.
 """
 
-import asyncio
 import base64
 import binascii
 import hashlib
 import json
-import socket
 import time
-from datetime import timedelta
 from decimal import Decimal, getcontext
 from logging import getLogger
 
+import pyrx
 from bitcoin.signmessage import BitcoinMessage, VerifyMessage
 from bitcoin.wallet import P2PKHBitcoinAddress
 from coincurve.utils import verify_signature
-from tornado.iostream import StreamClosedError
-from tornado.tcpclient import TCPClient
-from tornado.util import TimeoutError
 
-import pyrx
 import yadacoin.core.config
 from yadacoin.core.chain import CHAIN
 from yadacoin.core.config import Config
@@ -45,6 +39,7 @@ from yadacoin.core.keyeventlog import (
 )
 from yadacoin.core.latestblock import LatestBlock
 from yadacoin.core.nodes import Nodes
+from yadacoin.core.nodestester import NodesTester
 from yadacoin.core.transaction import (
     InvalidTransactionException,
     Output,
@@ -66,51 +61,6 @@ def quantize_eight(value):
     value = Decimal(value)
     value = value.quantize(Decimal("0.00000000"))
     return value
-
-
-async def test_node(node, semaphore):
-    config = Config()
-    async with semaphore:
-        try:
-            # DNS resolution block
-            # Check if the DNS for the node's host resolves to an IP address.
-            # If the DNS lookup fails, log the error and skip testing this node.
-            try:
-                socket.gethostbyname(node.host)
-            except socket.gaierror as dns_error:
-                config.app_log.warning(
-                    f"DNS resolution failed for {node.host}:{node.port}, error: {dns_error}"
-                )
-                return None
-
-            stream = await TCPClient().connect(
-                node.host, node.port, timeout=timedelta(seconds=2)
-            )
-            return node
-        except StreamClosedError:
-            config.app_log.warning(
-                f"Stream closed exception in block generate: testing masternode {node.host}:{node.port}"
-            )
-        except TimeoutError:
-            config.app_log.warning(
-                f"Timeout exception in block generate: testing masternode {node.host}:{node.port}"
-            )
-        except Exception as e:
-            config.app_log.warning(
-                f"Unhandled exception in block generate: testing masternode {node.host}:{node.port}, error: {e}"
-            )
-        finally:
-            if "stream" in locals() and not stream.closed():
-                stream.close()
-
-
-async def test_all_nodes(nodes):
-    # Limit the number of concurrent tasks
-    semaphore = asyncio.Semaphore(50)  # Adjust the limit as needed
-    tasks = [test_node(node, semaphore) for node in nodes]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    successful_nodes = [node for node in results if node is not None]
-    return successful_nodes
 
 
 class CoinbaseRule1(Exception):
@@ -420,15 +370,7 @@ class Block(object):
 
                 key_event = KeyEvent(txn, status=KeyEventChainStatus.MEMPOOL)
                 try:
-                    key_event_log = await KeyEventLog.init_async(
-                        key_event, hash_collection
-                    )
-                    if key_event_log.unconfirmed_key_event:
-                        for output in key_event_log.unconfirmed_key_event.txn.outputs:
-                            if output.to in hash_collection.public_key_hashes:
-                                raise KELException(
-                                    "Unconfirmed key event sends to a key event in the mempool."
-                                )
+                    await KeyEventLog.init_async(key_event, hash_collection)
                 except (KELException, KeyEventException) as e:
                     config.app_log.info(f"Txn removed from block: {e}")
                     block.transactions.remove(txn)

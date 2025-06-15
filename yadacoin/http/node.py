@@ -17,8 +17,8 @@ Handlers required by the core chain operations
 
 import json
 import time
-
 from datetime import datetime, timezone
+
 from tornado import escape
 
 from yadacoin.core.block import Block
@@ -219,6 +219,7 @@ class GetPendingTransactionHandler(BaseHandler):
     async def get(self):
         txn_id = self.get_query_argument("id", None).replace(" ", "+")
         if not txn_id:
+
             return self.render_as_json({"error": "Transaction ID missing"}, status=400)
 
         txn = await self.config.mongo.async_db.miner_transactions.find_one({"id": txn_id})
@@ -228,6 +229,31 @@ class GetPendingTransactionHandler(BaseHandler):
         else:
             return self.render_as_json({"error": "Transaction not found"}, status=404)
 
+
+class GetTransactionByPublicKeyHandler(BaseHandler):
+    async def get(self):
+        public_key = self.get_query_argument("public_key")
+        if not public_key:
+            return self.render_as_json({})
+
+        txns = await self.config.mongo.async_db.blocks.aggregate(
+            [
+                {"$match": {"transactions.public_key": public_key}},
+                {"$unwind": "$transactions"},
+                {"$match": {"transactions.public_key": public_key}},
+            ]
+        ).to_list(length=1)
+        if txns:
+            return self.render_as_json(txns[0]["transactions"])
+
+        txn = await self.config.mongo.async_db.miner_transactions.find_one(
+            {"public_key": public_key}
+        )
+        if txn:
+            txn["mempool"] = True
+            return self.render_as_json(txn)
+
+        return self.render_as_json({})
 
 
 class GetPendingTransactionIdsHandler(BaseHandler):
@@ -252,26 +278,36 @@ class GetTransactionTrackingHandler(BaseHandler):
 
         query = {"rid": rid} if rid else {}
 
-        transactions = await self.config.mongo.async_db.txn_tracking.find(query).to_list(length=None)
+        transactions = await self.config.mongo.async_db.txn_tracking.find(
+            query
+        ).to_list(length=None)
 
         response = []
 
         for entry in transactions:
             formatted_transactions = []
-            
-            if "transactions" in entry:
-                sorted_txn = sorted(entry["transactions"].items(), key=lambda x: x[1], reverse=True)
-                for txn_id, timestamp in sorted_txn[:limit]:
-                    formatted_transactions.append({
-                        "txn_id": txn_id,
-                        "timestamp": datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
-                    })
 
-            response.append({
-                "host": entry.get("host", "Unknown"),
-                "rid": entry["rid"],
-                "transactions": formatted_transactions
-            })
+            if "transactions" in entry:
+                sorted_txn = sorted(
+                    entry["transactions"].items(), key=lambda x: x[1], reverse=True
+                )
+                for txn_id, timestamp in sorted_txn[:limit]:
+                    formatted_transactions.append(
+                        {
+                            "txn_id": txn_id,
+                            "timestamp": datetime.fromtimestamp(
+                                timestamp, tz=timezone.utc
+                            ).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                        }
+                    )
+
+            response.append(
+                {
+                    "host": entry.get("host", "Unknown"),
+                    "rid": entry["rid"],
+                    "transactions": formatted_transactions,
+                }
+            )
 
         return self.render_as_json({"transaction_tracking": response})
 
@@ -494,6 +530,20 @@ class TransactionStatusHandler(BaseHandler):
         self.status_code = 404
         return self.render_as_json({"status": "failed", "message": "Transaction not found"})
 
+class GetTestedNodesHandler(BaseHandler):
+    async def get(self):
+        """Zwraca listę ostatnio przetestowanych węzłów."""
+        result = await self.config.mongo.async_db.tested_nodes.find_one(
+            {"_id": "latest_test"}, {"_id": 0}
+        )
+
+        if not result:
+            return self.render_as_json(
+                {"error": "No test results available."}, status=404
+            )
+
+        return self.render_as_json(result)
+
 
 NODE_HANDLERS = [
     (r"/get-latest-block", GetLatestBlockHandler),
@@ -504,6 +554,10 @@ NODE_HANDLERS = [
     (r"/newblock", NewBlockHandler),
     (r"/get-status", GetStatusHandler),
     (r"/get-pending-transaction", GetPendingTransactionHandler),
+    (
+        r"/get-transaction-by-public-key",
+        GetTransactionByPublicKeyHandler,
+    ),
     (r"/get-pending-transaction-ids", GetPendingTransactionIdsHandler),
     (r"/get-transaction-tracking", GetTransactionTrackingHandler),
     (r"/rebroadcast-transactions", RebroadcastTransactions),
@@ -517,4 +571,5 @@ NODE_HANDLERS = [
     (r"/get-block-template", GetBlockTemplateHandler),
     (r"/submitblock", SubmitBlockHandler),
     (r"/get-transaction-status", TransactionStatusHandler),
+    (r"/get-tested-nodes", GetTestedNodesHandler),
 ]
