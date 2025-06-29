@@ -31,6 +31,7 @@ from yadacoin.core.keyeventlog import (
     DoesNotSpendEntirelyToPrerotatedKeyHashException,
     FatalKeyEventException,
     KELException,
+    KELExceptionPreviousKeyHashReferenceMissing,
     KELHashCollection,
     KeyEvent,
     KeyEventChainStatus,
@@ -320,7 +321,9 @@ class Block(object):
             target=target,
         )
 
-        if index >= CHAIN.XEGGEX_HACK_FORK and index < CHAIN.CHECK_KEL_FORK:
+        if (index >= CHAIN.XEGGEX_HACK_FORK and index < CHAIN.CHECK_KEL_FORK) or (
+            index >= CHAIN.XEGGEX_HACK_FORK_2
+        ):
             for txn in block.transactions[:]:
                 remove = False
                 if (
@@ -462,6 +465,7 @@ class Block(object):
                     check_max_inputs=check_max_inputs,
                     check_masternode_fee=check_masternode_fee,
                     check_kel=check_kel,
+                    mempool=True,
                 )
                 for output in transaction_obj.outputs:
                     if not config.address_is_valid(output.to):
@@ -699,7 +703,7 @@ class Block(object):
                     await txn_key_event.verify()
                     await KeyEventLog.init_async(txn_key_event, kel_hash_collection)
                 elif txn.prev_public_key_hash:
-                    raise KELException(
+                    raise KELExceptionPreviousKeyHashReferenceMissing(
                         "Key event claims to have a key event log by specifying prev_public_key_hash, but no key event log found."
                     )
 
@@ -752,7 +756,7 @@ class Block(object):
             if (
                 self.index >= CHAIN.XEGGEX_HACK_FORK
                 and self.index < CHAIN.CHECK_KEL_FORK
-            ):
+            ) or (self.index >= CHAIN.XEGGEX_HACK_FORK_2):
                 if (
                     txn.public_key
                     == "02fd3ad0e7a613672d9927336d511916e15c507a1fab225ed048579e9880f15fed"

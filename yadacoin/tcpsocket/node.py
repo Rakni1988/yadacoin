@@ -23,6 +23,7 @@ from yadacoin.core.block import Block
 from yadacoin.core.blockchain import Blockchain
 from yadacoin.core.chain import CHAIN
 from yadacoin.core.config import Config
+from yadacoin.core.keyeventlog import KELExceptionPreviousKeyHashReferenceMissing
 from yadacoin.core.peer import (
     Group,
     Peer,
@@ -36,7 +37,7 @@ from yadacoin.core.processingqueue import (
     BlockProcessingQueueItem,
     TransactionProcessingQueueItem,
 )
-from yadacoin.core.transaction import Transaction
+from yadacoin.core.transaction import MissingInputTransactionException, Transaction
 from yadacoin.core.transactionutils import TU
 from yadacoin.enums.modes import MODES
 from yadacoin.enums.peertypes import PEER_TYPES
@@ -225,7 +226,7 @@ class NodeRPC(BaseRPC):
         if (
             self.config.LatestBlock.block.index >= CHAIN.XEGGEX_HACK_FORK
             and self.config.LatestBlock.block.index < CHAIN.CHECK_KEL_FORK
-        ):
+        ) or (self.config.LatestBlock.block.index >= CHAIN.XEGGEX_HACK_FORK_2):
             remove = False
             if (
                 txn.public_key
@@ -299,7 +300,13 @@ class NodeRPC(BaseRPC):
 
         item = self.config.processing_queues.transaction_queue.pop()
         i = 0  # max loops
+        to_retry = []
         while item:
+            if item.retry_time and item.retry_time < int(time.time()):
+                to_retry.append(item)
+                item = self.config.processing_queues.transaction_queue.pop()
+                if not item:
+                    break
             self.config.processing_queues.transaction_queue.inc_num_items_processed()
             await self.process_transaction_queue_item(item)
 
@@ -312,6 +319,20 @@ class NodeRPC(BaseRPC):
 
             item = self.config.processing_queues.transaction_queue.pop()
 
+        if hasattr(self.config, "transaction_retry_seconds"):
+            transaction_retry_seconds = self.config.transaction_retry_seconds
+        else:
+            transaction_retry_seconds = 60
+        for retry_item in to_retry:
+            self.config.processing_queues.transaction_queue.add(
+                TransactionProcessingQueueItem(
+                    retry_item.transaction,
+                    retry_item.stream,
+                    int(time.time()) + transaction_retry_seconds,
+                ),
+                ignore_last_popped=True,
+            )
+
     async def process_transaction_queue_item(self, item):
         """
         Processes each transaction from the queue, verifies it, and propagates it to unconfirmed peers.
@@ -322,7 +343,6 @@ class NodeRPC(BaseRPC):
         - Sends transaction to inbound and outbound peers who have not yet confirmed it.
         """
         txn = item.transaction
-        item.stream
 
         check_max_inputs = False
         if self.config.LatestBlock.block.index > CHAIN.CHECK_MAX_INPUTS_FORK:
@@ -342,7 +362,16 @@ class NodeRPC(BaseRPC):
                 check_max_inputs=check_max_inputs,
                 check_masternode_fee=check_masternode_fee,
                 check_kel=check_kel,
+                mempool=True,
             )
+        except (
+            MissingInputTransactionException,
+            KELExceptionPreviousKeyHashReferenceMissing,
+        ):
+            self.config.app_log.warning(
+                f"process_transaction_queue_item, skipping for now: {txn.transaction_signature}"
+            )
+            return
         except Exception as e:
             await Transaction.handle_exception(e, txn)
             return
@@ -372,16 +401,19 @@ class NodeRPC(BaseRPC):
             for stream in streams:
                 yield stream
 
+        payload = {"transaction": txn.to_dict()}
+
         async for peer_stream in self.config.peer.get_inbound_streams():
             if peer_stream.peer.rid in confirmed_rids:
                 self.config.app_log.debug(
                     f"Skipping {peer_stream.peer.rid} - already confirmed."
                 )
                 continue
+            await self.write_params(peer_stream, "newtxn", payload)
             if peer_stream.peer.protocol_version > 1:
                 self.retry_messages[
                     (peer_stream.peer.rid, "newtxn", txn.transaction_signature)
-                ] = {"transaction": txn.to_dict()}
+                ] = payload
 
         async for peer_stream in make_gen(
             await self.config.peer.get_outbound_streams()
@@ -391,10 +423,11 @@ class NodeRPC(BaseRPC):
                     f"Skipping {peer_stream.peer.rid} - already confirmed."
                 )
                 continue
+            await self.write_params(peer_stream, "newtxn", payload)
             if peer_stream.peer.protocol_version > 1:
                 self.config.nodeClient.retry_messages[
                     (peer_stream.peer.rid, "newtxn", txn.transaction_signature)
-                ] = {"transaction": txn.to_dict()}
+                ] = payload
 
     async def newtxn_confirmed(self, body, stream):
         """

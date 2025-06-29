@@ -546,9 +546,12 @@ class Transaction(object):
         check_masternode_fee=False,
         check_kel=False,
         block=None,
+        mempool=False,
     ):
         from yadacoin.contracts.base import Contract
-        from yadacoin.core.keyeventlog import KELException
+        from yadacoin.core.keyeventlog import (
+            KELExceptionPreviousKeyHashReferenceMissing,
+        )
 
         if check_max_inputs and len(self.inputs) > CHAIN.MAX_INPUTS:
             raise TooManyInputsException(
@@ -561,13 +564,13 @@ class Transaction(object):
         if check_kel:
             from yadacoin.core.keyeventlog import KeyEvent
 
-            has_kel = await self.has_key_event_log(block)
+            has_kel = await self.has_key_event_log(block, mempool)
 
             if has_kel:
                 txn_key_event = KeyEvent(self)
                 await txn_key_event.verify()
             elif self.prev_public_key_hash:
-                raise KELException(
+                raise KELExceptionPreviousKeyHashReferenceMissing(
                     "Key event claims to have a key event log by specifying prev_public_key_hash, but no key event log found."
                 )
 
@@ -1130,8 +1133,8 @@ class Transaction(object):
             return True
         return False
 
-    async def has_key_event_log(self, block=None):
-        from yadacoin.core.keyeventlog import BlocksQueryFields
+    async def has_key_event_log(self, block=None, mempool=False):
+        from yadacoin.core.keyeventlog import BlocksQueryFields, MempoolQueryFields
 
         # this function is the primary method for catching transactions which attempt
         # sign a transaction with a stolen key. We must check if the transaction's
@@ -1164,6 +1167,18 @@ class Transaction(object):
                         or xtxn.prerotated_key_hash == address
                     ):
                         return True
+        elif mempool:
+            query = {
+                "$or": [
+                    {MempoolQueryFields.TWICE_PREROTATED_KEY_HASH.value: address},
+                    {
+                        MempoolQueryFields.PREROTATED_KEY_HASH.value: address,
+                    },
+                ],
+            }
+            result = await config.mongo.async_db.miner_transactions.find_one(query)
+            if result:
+                return True
         return False
 
     async def verify_key_event_spends_entire_balance(self):
