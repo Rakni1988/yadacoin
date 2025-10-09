@@ -321,10 +321,8 @@ class SentPendingTransactionsView(BaseHandler):
         public_key = self.get_query_argument("public_key")
         include_zero = self.get_query_argument("include_zero", False)
         page = int(self.get_query_argument("page", 1)) - 1
-        address = str(P2PKHBitcoinAddress.from_pubkey(bytes.fromhex(public_key)))
 
         query = {
-            "outputs.to": address,
             "public_key": public_key,
         }
         if not include_zero:
@@ -348,11 +346,9 @@ class SentTransactionsView(BaseHandler):
         public_key = self.get_query_argument("public_key")
         include_zero = self.get_query_argument("include_zero", False)
         page = int(self.get_query_argument("page", 1)) - 1
-        address = str(P2PKHBitcoinAddress.from_pubkey(bytes.fromhex(public_key)))
         query = [
             {
                 "$match": {
-                    "transactions.outputs.to": address,
                     "transactions.inputs.0": {"$exists": True},
                     "transactions.public_key": public_key,
                 }
@@ -360,7 +356,6 @@ class SentTransactionsView(BaseHandler):
             {"$unwind": "$transactions"},
             {
                 "$match": {
-                    "transactions.outputs.to": address,
                     "transactions.inputs.0": {"$exists": True},
                     "transactions.public_key": public_key,
                 }
@@ -634,6 +629,49 @@ class ConvertPublicKeyToAddressHandler(BaseHandler):
         )
 
 
+class FeeEstimateHandler(BaseHandler):
+    async def get(self):
+        # Fetch up to 1000 transactions with non-zero fees
+        cursor = self.config.mongo.async_db.miner_transactions.aggregate(
+            [
+                {"$match": {"transactions.fee": {"$gt": 0}}},
+                {"$project": {"fee": "$transactions.fee"}},
+                {"$sort": {"fee": -1}},
+                {"$limit": 1000},
+            ]
+        )
+
+        txns = await cursor.to_list(length=1000)
+
+        if len(txns) < 1000:
+            self.write(
+                {
+                    "status": "not_congested",
+                    "txns_count": len(txns),
+                    "message": "Block not full. Any non-zero fee likely to be accepted.",
+                    "recommended_fee": 0.00,  # or any minimum you consider valid
+                }
+            )
+            return
+
+        fees = [round(tx["fee"], 8) for tx in txns]
+        estimate = {
+            "min_fee": fees[-1],
+            "median_fee": fees[len(fees) // 2],
+            "percentile_25_fee": fees[len(fees) // 4],
+            "percentile_75_fee": fees[3 * len(fees) // 4],
+            "max_fee": fees[0],
+        }
+
+        self.write(
+            {
+                "status": "congested",
+                "txns_considered": len(fees),
+                "fee_estimate": estimate,
+            }
+        )
+
+
 WALLET_HANDLERS = [
     (r"/wallet?([\/a-z]+)", WalletHandler),
     (r"/generate-wallet", GenerateWalletHandler),
@@ -654,4 +692,5 @@ WALLET_HANDLERS = [
     (r"/validate-address", ValidateAddressHandler),
     (r"/get-transaction-by-id", TransactionByIdHandler),
     (r"/convert-public-key-to-address", ConvertPublicKeyToAddressHandler),
+    (r"/fee-estimate", FeeEstimateHandler),
 ]
