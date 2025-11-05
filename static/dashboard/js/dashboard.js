@@ -30,6 +30,13 @@ async function loadSection(section) {
                 }
             });
         }
+        else if (section === "mnstatus") {
+            await loadScript("/yadacoinstatic/dashboard/js/mnstatus.js", () => {
+                if (typeof loadMNStatus === "function") {
+                    loadMNStatus();
+                }
+            });
+        }
         else if (section === "logs") {
             await loadScript("/yadacoinstatic/dashboard/js/logs.js", () => {
                 if (typeof loadLogsData === "function") {

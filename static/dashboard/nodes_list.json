@@ -1,0 +1,290 @@
+[
+  {
+    "host": "yadacoin.io",
+    "protocol": "https",
+    "port": 443,
+    "peer_type": "seed"
+  },
+  {
+    "host": "seed.hashyada.com",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seed"
+  },
+  {
+    "host": "seedau.hashyada.com",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seed"
+  },
+  {
+    "host": "seed.crbrain.online",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seed"
+  },
+  {
+    "host": "yada-alpha.mynodes.live",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seed"
+  },
+  {
+    "host": "seed.yada.toksyk.pl",
+    "protocol": "http",
+    "port": 8001,
+    "peer_type": "seed"
+  },
+  {
+    "host": "seed.darksidetx.net",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seed"
+  },
+  {
+    "host": "seedno.hashyada.com",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seed"
+  },
+  {
+    "host": "seed.friendspool.club",
+    "protocol": "http",
+    "port": 8001,
+    "peer_type": "seed"
+  },
+  {
+    "host": "seed.berkinyada.xyz",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seed"
+  },
+  {
+    "host": "seed.funckyman.xyz",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seed"
+  },
+  {
+    "host": "yadaseed1.hashrank.top",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seed"
+  },
+  {
+    "host": "seed.supahash.com",
+    "protocol": "http",
+    "port": 8001,
+    "peer_type": "seed"
+  },
+  {
+    "host": "seed.nephotim.co",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seed"
+  },
+  {
+    "host": "seed.rogue-miner.com",
+    "protocol": "http",
+    "port": 8080,
+    "peer_type": "seed"
+  },
+  {
+    "host": "seed.yadaid.au",
+    "protocol": "http",
+    "port": 8003,
+    "peer_type": "seed"
+  },
+  {
+    "host": "remotelyrich.com",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "seedgateway.hashyada.com",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "seedgatewayau.hashyada.com",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "seedgateway.crbrain.online",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "yada-bravo.mynodes.live",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "seedgateway.yada.toksyk.pl",
+    "protocol": "http",
+    "port": 8001,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "seedgateway.darksidetx.net",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "seedgatewayno.hashyada.com",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "seedgateway.friendspool.club",
+    "protocol": "http",
+    "port": 8002,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "seedgat.berkinyada.xyz",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "seedgateway.funckyman.xyz",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "yadaseed2.hashrank.top",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "seedgateway.supahash.com",
+    "protocol": "http",
+    "port": 8001,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "gateway.nephotim.co",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "seedgateway.rogue-miner.com",
+    "protocol": "http",
+    "port": 8081,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "seedgateway.yadaid.au",
+    "protocol": "http",
+    "port": 8005,
+    "peer_type": "seedgateway"
+  },
+  {
+    "host": "centeridentity.com",
+    "protocol": "https",
+    "port": 443,
+    "peer_type": "serviceprovider"
+  },
+  {
+    "host": "serviceprovider.hashyada.com",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "serviceprovider"
+  },
+  {
+    "host": "serviceproviderau.hashyada.com",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "serviceprovider"
+  },
+  {
+    "host": "serviceprovider.crbrain.online",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "serviceprovider"
+  },
+  {
+    "host": "yada-charlie.mynodes.live",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "serviceprovider"
+  },
+  {
+    "host": "serviceprovider.yada.toksyk.pl",
+    "protocol": "http",
+    "port": 8001,
+    "peer_type": "serviceprovider"
+  },
+  {
+    "host": "serviceprovider.darksidetx.net",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "serviceprovider"
+  },
+  {
+    "host": "serviceproviderno.hashyada.com",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "serviceprovider"
+  },
+  {
+    "host": "serviceprovider.friendspool.club",
+    "protocol": "http",
+    "port": 8003,
+    "peer_type": "serviceprovider"
+  },
+  {
+    "host": "servic.berkinyada.xyz",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "serviceprovider"
+  },
+  {
+    "host": "serviceprovider.funckyman.xyz",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "serviceprovider"
+  },
+  {
+    "host": "yadaseed3.hashrank.top",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "serviceprovider"
+  },
+  {
+    "host": "serviceprovider.supahash.com",
+    "protocol": "http",
+    "port": 8001,
+    "peer_type": "serviceprovider"
+  },
+  {
+    "host": "serviceprovider.nephotim.co",
+    "protocol": "http",
+    "port": 80,
+    "peer_type": "serviceprovider"
+  },
+  {
+    "host": "serviceprovider.rogue-miner.com",
+    "protocol": "http",
+    "port": 8082,
+    "peer_type": "serviceprovider"
+  },
+  {
+    "host": "serviceprovider.yadaid.au",
+    "protocol": "http",
+    "port": 8001,
+    "peer_type": "serviceprovider"
+  }
+]
