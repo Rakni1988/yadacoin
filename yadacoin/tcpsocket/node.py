@@ -206,7 +206,7 @@ class NodeRPC(BaseRPC):
             {"id": txn_id}
         )
         if existing_txn:
-            self.config.app_log.warning(
+            self.config.app_log.debug(
                 f"Transaction {txn_id} already in mempool! Ignoring."
             )
             return
@@ -472,7 +472,7 @@ class NodeRPC(BaseRPC):
             upsert=True,
         )
 
-        self.config.app_log.info(
+        self.config.app_log.debug(
             f"[NEW_TXN_CONFIRM] Transaction {txn_id} confirmed by peer {stream.peer.rid}. Peer added to confirmed list."
         )
 
@@ -515,7 +515,7 @@ class NodeRPC(BaseRPC):
         )
 
         if existing_block:
-            self.config.app_log.warning(
+            self.config.app_log.debug(
                 f"[NEW_BLOCK] Block {block_index} already exists in DB, skipping processing."
             )
             return

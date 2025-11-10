@@ -31,11 +31,15 @@ async function loadSection(section) {
             });
         }
         else if (section === "mnstatus") {
-            await loadScript("/yadacoinstatic/dashboard/js/mnstatus.js", () => {
-                if (typeof loadMNStatus === "function") {
-                    loadMNStatus();
-                }
-            });
+          await loadScript("/yadacoinstatic/dashboard/js/mnstatus.js", () => {
+            if (typeof initMNStatus === "function") {
+              initMNStatus();
+            } else if (typeof loadMNStatus === "function") {
+              loadMNStatus();
+            } else {
+              console.error("MN status script loaded, but no initMNStatus()/loadMNStatus() found.");
+            }
+          });
         }
         else if (section === "logs") {
             await loadScript("/yadacoinstatic/dashboard/js/logs.js", () => {

@@ -13,6 +13,18 @@ function cmpVer(a, b) {
   return 0;
 }
 
+function bindMNRefresh() {
+  const btn = document.getElementById("mn-refresh");
+  if (btn) {
+    btn.onclick = () => {
+      console.log("[MN] Refresh click");
+      loadMNStatus();
+    };
+  } else {
+    console.warn("[MN] #mn-refresh not found");
+  }
+}
+
 async function loadMNStatus() {
   const info = document.getElementById("mn-info");
   const okTbody = document.querySelector("#mn-table-ok tbody");
@@ -32,7 +44,6 @@ async function loadMNStatus() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const nodes = await resp.json();
 
-    // równoległe /get-monitoring z per-request timeoutem
     const timeoutMs = 5000;
     const perNodeFetch = async (n) => {
       const url = `${n.protocol}://${n.host}:${n.port}/get-monitoring`;
@@ -127,7 +138,8 @@ async function loadMNStatus() {
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  const btn = document.getElementById("mn-refresh");
-  if (btn) btn.addEventListener("click", loadMNStatus);
-});
+function initMNStatus() {
+  console.log("[MN] initMNStatus()");
+  bindMNRefresh();
+  loadMNStatus();
+}
