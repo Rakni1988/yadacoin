@@ -315,10 +315,6 @@ class CHAIN(object):
 
         if current_block_time > 2 * target_time:
             if block.index >= CHAIN.FORK_SMOOTH_RETARGET:
-                cls.config.app_log.warning(
-                    f"[RETARGET-EDGE] tip={last_block.index} Δ={current_block_time}s "
-                    f"target_time={target_time}s current_target={last_block.target}"
-                )
                 current_target = last_block.target
                 # Linear decrease to reach max target after one hour block time.
                 new_target = int(
@@ -328,6 +324,10 @@ class CHAIN(object):
                 )
                 # print("adjust", current_block_time, MinerSimulator.HEX(new_target), latest_target)
                 adjusted = new_target
+                cls.config.app_log.warning(
+                    f"[RETARGET-EDGE] tip={last_block.index} Δ={current_block_time}s "
+                    f"new_target={hex(adjusted)[2:18]} old={hex(last_block.target)[2:18]}"
+                )
                 # To be used later on, once the rest is calc'd
             else:
                 latest_target = last_block.target

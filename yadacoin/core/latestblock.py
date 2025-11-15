@@ -76,7 +76,6 @@ class LatestBlock:
         from yadacoin.core.transaction import Transaction
         import time as _time
 
-        # Upewnij się, że mamy aktualny tip
         if not cls.block:
             await cls.update_latest_block()
         if not cls.block:
@@ -85,7 +84,7 @@ class LatestBlock:
         now       = int(_time.time())
         tip_hash  = cls.block.hash
         tip_index = cls.block.index
-        tip_time  = int(cls.block.time)   # czas „prawdziwy” z łańcucha, nie lokalny
+        tip_time  = int(cls.block.time)
 
         # --- DETEKCJA ZMIANY TIP'A / REORG'U ---
         tip_changed = (
@@ -102,39 +101,63 @@ class LatestBlock:
             # Inwalidacja cache'u, żeby kolejny przebieg mógł zbudować template
             cls.blocktemplate_hash  = None
             cls.blocktemplate_index = None
-            # cls.blocktemplate_time i target zostaną nadpisane przy rebuildzie
+            # blocktemplate_time / target nadpiszą się przy rebuildzie
 
         # --- ILE MINĘŁO OD TIP-TIME ---
         delta_from_tip = max(0, now - tip_time)
 
         # --- WARUNKI REBUILD'U ---
+
         # 1) tip zmienił się albo nie mamy jeszcze zbudowanego template'u
         needs_rebuild = (
             (cls.block.hash  != getattr(cls, "blocktemplate_hash",  None)) or
             (cls.block.index != getattr(cls, "blocktemplate_index", None)) or
-            (getattr(cls, "blocktemplate_time", None) is None) or
+            (getattr(cls, "blocktemplate_time", None)   is None) or
             (getattr(cls, "blocktemplate_target", None) is None)
         )
 
         # 2) jednorazowy refresh po ~20 min od czasu tipa (2×target_time + margines)
         EDGE_SEC = 1205
-        edge_rebuild = (delta_from_tip >= EDGE_SEC) and (getattr(cls, "_retarget_done", False) is False)
+        edge_rebuild = (
+            delta_from_tip >= EDGE_SEC and
+            getattr(cls, "_retarget_done", False) is False
+        )
 
-        if needs_rebuild or edge_rebuild:
+        # 3) kolejne refresh'e co 12 minut PO pierwszym edge-rebuildzie
+        REFRESH_SEC = 600  # 10 minut
+        last_tpl_time = getattr(cls, "blocktemplate_time", None)
+        periodic_rebuild = (
+            getattr(cls, "_retarget_done", False) is True and
+            last_tpl_time is not None and
+            (now - int(last_tpl_time)) >= REFRESH_SEC
+        )
+
+        if needs_rebuild or edge_rebuild or periodic_rebuild:
             async with cls._build_lock:
-                # double-check po locku (równoległy /get mógł już odbudować)
+                # double-check after lock
                 now = int(_time.time())
                 delta_from_tip = max(0, now - tip_time)
+                last_tpl_time  = getattr(cls, "blocktemplate_time", None)
 
                 needs_rebuild = (
                     (cls.block.hash  != getattr(cls, "blocktemplate_hash",  None)) or
                     (cls.block.index != getattr(cls, "blocktemplate_index", None)) or
-                    (getattr(cls, "blocktemplate_time", None) is None) or
+                    (getattr(cls, "blocktemplate_time", None)   is None) or
                     (getattr(cls, "blocktemplate_target", None) is None)
                 )
-                edge_rebuild = (delta_from_tip >= EDGE_SEC) and (getattr(cls, "_retarget_done", False) is False)
 
-                if needs_rebuild or edge_rebuild:
+                edge_rebuild = (
+                    delta_from_tip >= EDGE_SEC and
+                    getattr(cls, "_retarget_done", False) is False
+                )
+
+                periodic_rebuild = (
+                    getattr(cls, "_retarget_done", False) is True and
+                    last_tpl_time is not None and
+                    (now - int(last_tpl_time)) >= REFRESH_SEC
+                )
+
+                if needs_rebuild or edge_rebuild or periodic_rebuild:
                     try:
                         tx_raw = await cls.config.mongo.async_db.miner_transactions.find().to_list(length=None)
                         txs = [Transaction.ensure_instance(txn) for txn in tx_raw]
@@ -158,6 +181,17 @@ class LatestBlock:
                                 f"[GBT] one-shot refresh at Δ={delta_from_tip}s for tip={cls.block.index} "
                                 f"target={hex(cls.blocktemplate_target)[2:18]}..."
                             )
+                        elif periodic_rebuild:
+                            since_tpl = now - int(last_tpl_time or 0)
+                            cls.config.app_log.info(
+                                f"[GBT] periodic refresh after {since_tpl}s (interval={REFRESH_SEC}s) "
+                                f"for tip={cls.block.index}"
+                            )
+                        elif needs_rebuild:
+                            cls.config.app_log.info(
+                                "[GBT] template (re)built due to cache miss / tip change"
+                            )
+
                     except Exception as e:
                         cls.config.app_log.error(f"Error generating full block template: {e}")
                         raise
